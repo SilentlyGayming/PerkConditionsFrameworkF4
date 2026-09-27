@@ -1,0 +1,12 @@
+/build/
+/.deps/
+/.vs/
+/CMakeUserPresets.json
+*.user
+*.suo
+*.VC.db
+*.dll
+*.pdb
+*.log
+*.dmp
+*.mdmp

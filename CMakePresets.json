@@ -1,0 +1,50 @@
+{
+  "version": 2,
+  "cmakeMinimumRequired": {
+    "major": 4,
+    "minor": 2,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "vs2026-windows-vcpkg",
+      "displayName": "Perk Conditions Framework - VS 2026",
+      "generator": "Visual Studio 18 2026",
+      "binaryDir": "${sourceDir}/build",
+      "architecture": "x64",
+      "toolset": "v145",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": {
+          "type": "STRING",
+          "value": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+        },
+        "VCPKG_TARGET_TRIPLET": {
+          "type": "STRING",
+          "value": "x64-windows-static-md"
+        },
+        "Boost_USE_STATIC_LIBS": {
+          "type": "BOOL",
+          "value": "ON"
+        },
+        "CMAKE_MSVC_RUNTIME_LIBRARY": {
+          "type": "STRING",
+          "value": "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL"
+        }
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "vs2026-debug",
+      "configurePreset": "vs2026-windows-vcpkg",
+      "configuration": "Debug",
+      "jobs": 0
+    },
+    {
+      "name": "vs2026-release",
+      "configurePreset": "vs2026-windows-vcpkg",
+      "configuration": "Release",
+      "jobs": 0
+    }
+  ]
+}

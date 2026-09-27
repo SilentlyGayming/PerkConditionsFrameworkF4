@@ -1,0 +1,23 @@
+Perk Conditions Framework dependency versions
+
+CommonLibF4RD
+  Repository: https://github.com/Zzyxz/CommonLibF4RD.git
+  Git tree: ba719ae5909a1be8fcec56f22eed07c1be067e3e
+
+toml++
+  Repository: https://github.com/marzer/tomlplusplus.git
+  Version: v3.4.0
+  Commit: 30172438cee64926dc41fdd9c11fb3ba5b2ba9de
+
+vcpkg
+  Repository: https://github.com/microsoft/vcpkg.git
+  Baseline: a1cae005c39be7b18ba319fced856b68d7276271
+
+Toolchain
+  CMake minimum: 4.2
+  Configure preset: vs2026-windows-vcpkg
+  Build preset: vs2026-release
+  Generator: Visual Studio 18 2026
+  Architecture: x64
+  Toolset: v145
+  Configuration: Release
