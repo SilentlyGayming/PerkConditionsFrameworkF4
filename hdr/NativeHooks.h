@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "REL/Relocation.h"
+#include "REL/Relocation.hpp"
 
 #ifdef _MSC_VER
 #	pragma warning(push, 0)
@@ -107,7 +107,7 @@ namespace PCF::NativeHooks
 		if (!a_destination || a_bytes.empty()) {
 			return false;
 		}
-		REL::safe_write(a_destination, a_bytes.data(), a_bytes.size());
+		REL::WriteSafe(a_destination, a_bytes.data(), a_bytes.size());
 		return std::memcmp(reinterpret_cast<const void*>(a_destination), a_bytes.data(), a_bytes.size()) == 0;
 	}
 

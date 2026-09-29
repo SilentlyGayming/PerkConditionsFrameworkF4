@@ -406,7 +406,7 @@ namespace
 		std::unordered_set<std::uint32_t> topics;
 		if (a_data) {
 			REL::Relocation<std::uintptr_t> playerDialogueVtable{ RE::VTABLE::BGSSceneActionPlayerDialogue[0] };
-			const auto expectedVtable = playerDialogueVtable.address();
+			const auto expectedVtable = playerDialogueVtable.GetAddress();
 			for (auto* scene : a_data->GetFormArray<RE::BGSScene>()) {
 				if (!scene) {
 					continue;
@@ -1013,17 +1013,17 @@ namespace
 	// Makes sure the shared hook space is large enough for INFO and text hooks.
 	bool EnsureHookSpace(std::size_t a_required)
 	{
-		auto& trampoline = F4SE::GetTrampoline();
-		if (trampoline.empty()) {
+		auto& trampoline = **REL::GetTrampoline();
+		if (trampoline.IsEmpty()) {
 			constexpr std::size_t trampolineSize = 512;
-			const auto* api = F4SE::GetTrampolineInterface();
-			auto* memory = api ? api->AllocateFromBranchPool(trampolineSize) : nullptr;
+			const auto api = F4SE::GetTrampolineInterface();
+			auto* memory = static_cast<std::byte*>(api->AllocateFromBranchPool(trampolineSize));
 			if (!memory) {
 				return false;
 			}
-			trampoline.set_trampoline(memory, trampolineSize);
+			trampoline.Init(memory, trampolineSize);
 		}
-		return trampoline.free_size() >= a_required;
+		return trampoline.GetFreeSize() >= a_required;
 	}
 
 	// Installs the INFO text hooks after checking the required game functions.
@@ -1034,25 +1034,21 @@ namespace
 		}
 		g_infoEarlyHookAttempted = true;
 		try {
-			const auto load = REL::IDDatabase::get().resolve(PCF::EngineIDs::TESTopicInfoLoad);
-			const auto init = REL::IDDatabase::get().resolve(PCF::EngineIDs::TESTopicInfoInitItemImpl);
-			const auto localizedLoad = REL::IDDatabase::get().resolve(PCF::EngineIDs::LocalizedSubrecordLoad);
-			const auto responseTextLoad = REL::IDDatabase::get().resolve(PCF::EngineIDs::TESResponseTextLoad);
-			const auto fallback = REL::IDDatabase::get().resolve(PCF::EngineIDs::DialoguePromptFallback);
-			const auto getter = REL::IDDatabase::get().resolve(PCF::EngineIDs::DialoguePromptGetter);
-			const auto setter = REL::IDDatabase::get().resolve(PCF::EngineIDs::DialoguePromptSetter);
-			const auto insert = REL::IDDatabase::get().resolve(PCF::EngineIDs::DialoguePromptInsert);
-			if (!load || !init || !localizedLoad || !responseTextLoad || !fallback || !getter || !setter || !insert) {
-				return DisableInfoHooks("required relocation ID unavailable");
-			}
+			const auto load = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::TESTopicInfoLoad }.GetAddress();
+			const auto init = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::TESTopicInfoInitItemImpl }.GetAddress();
+			const auto localizedLoad = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::LocalizedSubrecordLoad }.GetAddress();
+			const auto responseTextLoad = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::TESResponseTextLoad }.GetAddress();
+			const auto fallback = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::DialoguePromptFallback }.GetAddress();
+			const auto getter = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::DialoguePromptGetter }.GetAddress();
+			const auto setter = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::DialoguePromptSetter }.GetAddress();
+			const auto insert = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::DialoguePromptInsert }.GetAddress();
 
-			const auto base = REL::Module::get().base();
-			const auto responseLoadCallsite = base + *load.rva + kResponseTextLoadCallOffset;
-			const auto rnamLoadCallsite = base + *load.rva + kRNAMLocalizedLoadCallOffset;
-			const auto captureCallsite = base + *load.rva + kRNAMInsertCallOffset;
-			const auto expectedResponseTextLoad = base + *responseTextLoad.rva;
-			const auto expectedLocalizedLoad = base + *localizedLoad.rva;
-			const auto expectedInsert = base + *insert.rva;
+			const auto responseLoadCallsite = load + kResponseTextLoadCallOffset;
+			const auto rnamLoadCallsite = load + kRNAMLocalizedLoadCallOffset;
+			const auto captureCallsite = load + kRNAMInsertCallOffset;
+			const auto expectedResponseTextLoad = responseTextLoad;
+			const auto expectedLocalizedLoad = localizedLoad;
+			const auto expectedInsert = insert;
 
 			const auto validateCall = [](std::uintptr_t a_callsite, std::uintptr_t a_expected) {
 				if (*reinterpret_cast<const std::uint8_t*>(a_callsite) != 0xE8) {
@@ -1075,9 +1071,9 @@ namespace
 			}
 
 			REL::Relocation<std::uintptr_t> vtable{ RE::TESTopicInfo::VTABLE[0] };
-			const auto vtableAddress = vtable.address();
+			const auto vtableAddress = vtable.GetAddress();
 			const auto initSlot = vtableAddress + (sizeof(void*) * kInfoInitVtableSlot);
-			const auto expectedInit = base + *init.rva;
+			const auto expectedInit = init;
 			if (*reinterpret_cast<const std::uintptr_t*>(initSlot) != expectedInit) {
 				return DisableInfoHooks("TESTopicInfo InitItemImpl vtable slot does not match the expected target");
 			}
@@ -1085,21 +1081,21 @@ namespace
 				return DisableInfoHooks("branch-pool allocation failed");
 			}
 
-			g_promptFallback = reinterpret_cast<DialoguePromptFallback>(base + *fallback.rva);
-			g_promptGetter = reinterpret_cast<DialoguePromptGetter>(base + *getter.rva);
-			g_promptSetter = reinterpret_cast<DialoguePromptSetter>(base + *setter.rva);
+			g_promptFallback = reinterpret_cast<DialoguePromptFallback>(fallback);
+			g_promptGetter = reinterpret_cast<DialoguePromptGetter>(getter);
+			g_promptSetter = reinterpret_cast<DialoguePromptSetter>(setter);
 			g_rnamLocalizedLoadOriginal = reinterpret_cast<LocalizedSubrecordLoadFunction>(expectedLocalizedLoad);
 			g_responseTextLoadOriginal = reinterpret_cast<ResponseTextLoadFunction>(expectedResponseTextLoad);
 			g_rnamInsertOriginal = reinterpret_cast<RNAMInsertFunction>(expectedInsert);
 			g_infoInitOriginal = reinterpret_cast<InfoInitFunction>(expectedInit);
 
-			auto& trampoline = F4SE::GetTrampoline();
+			auto& trampoline = **REL::GetTrampoline();
 			const auto restoreCallIfOwned = [&trampoline](std::uintptr_t a_callsite, std::uintptr_t a_replacement,
 				std::uintptr_t a_original, std::string_view a_name) {
 				if (!a_original || !PCF::NativeHooks::IsRelativeCallTo(a_callsite, a_replacement)) {
 					return;
 				}
-				trampoline.write_call<5>(a_callsite, a_original);
+				trampoline.WriteCall<5>(a_callsite, a_original);
 				if (!PCF::NativeHooks::IsRelativeCallTo(a_callsite, a_original)) {
 					spdlog::warn("INFO {} hook rollback could not be verified; PCF INFO behavior remains inactive", a_name);
 				}
@@ -1108,7 +1104,7 @@ namespace
 				if (!a_original || !PCF::NativeHooks::IsVtableSlotSet(vtableAddress, kInfoInitVtableSlot, a_replacement)) {
 					return;
 				}
-				vtable.write_vfunc(kInfoInitVtableSlot, a_original);
+				vtable.WriteVirtualCall(kInfoInitVtableSlot, a_original);
 				if (*reinterpret_cast<const std::uintptr_t*>(initSlot) != a_original) {
 					spdlog::warn("INFO InitItemImpl hook rollback could not be verified; PCF INFO behavior remains inactive");
 				}
@@ -1119,7 +1115,7 @@ namespace
 			const auto insertReplacement = reinterpret_cast<std::uintptr_t>(&RNAMInsertHook);
 			const auto initReplacement = reinterpret_cast<std::uintptr_t>(&InfoLoadHook);
 
-			const auto previousRNAMLoad = trampoline.write_call<5>(rnamLoadCallsite, &RNAMLoadHook);
+			const auto previousRNAMLoad = trampoline.WriteCall<5>(rnamLoadCallsite, &RNAMLoadHook);
 			if (previousRNAMLoad) {
 				g_rnamLocalizedLoadOriginal = reinterpret_cast<LocalizedSubrecordLoadFunction>(previousRNAMLoad);
 			}
@@ -1129,7 +1125,7 @@ namespace
 				return DisableInfoHooks("RNAM localized-load hook write could not be verified");
 			}
 
-			const auto previousResponseLoad = trampoline.write_call<5>(responseLoadCallsite, &ResponseLoadHook);
+			const auto previousResponseLoad = trampoline.WriteCall<5>(responseLoadCallsite, &ResponseLoadHook);
 			if (previousResponseLoad) {
 				g_responseTextLoadOriginal = reinterpret_cast<ResponseTextLoadFunction>(previousResponseLoad);
 			}
@@ -1140,7 +1136,7 @@ namespace
 				return DisableInfoHooks("response-text load hook write could not be verified");
 			}
 
-			const auto previousInsert = trampoline.write_call<5>(captureCallsite, &RNAMInsertHook);
+			const auto previousInsert = trampoline.WriteCall<5>(captureCallsite, &RNAMInsertHook);
 			if (previousInsert) {
 				g_rnamInsertOriginal = reinterpret_cast<RNAMInsertFunction>(previousInsert);
 			}
@@ -1152,7 +1148,7 @@ namespace
 				return DisableInfoHooks("RNAM insertion hook write could not be verified");
 			}
 
-			const auto previousInit = vtable.write_vfunc(kInfoInitVtableSlot, &InfoLoadHook);
+			const auto previousInit = vtable.WriteVirtualCall(kInfoInitVtableSlot, &InfoLoadHook);
 			if (previousInit) {
 				g_infoInitOriginal = reinterpret_cast<InfoInitFunction>(previousInit);
 			}

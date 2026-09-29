@@ -1393,7 +1393,7 @@ namespace
 			return false;
 		}
 		REL::Relocation<std::uintptr_t> vtable{ a_vtable };
-		const auto previous = vtable.write_vfunc(kCallSlot, &CraftingMenuCallHook<Index>);
+		const auto previous = vtable.WriteVirtualCall(kCallSlot, &CraftingMenuCallHook<Index>);
 		hook.call = reinterpret_cast<CallFunction>(previous);
 		return hook.call != nullptr && PCF::NativeHooks::IsVtableSlotSet(a_vtable, kCallSlot, replacement);
 	}
@@ -1411,7 +1411,7 @@ namespace
 			return false;
 		}
 		REL::Relocation<std::uintptr_t> vtable{ a_vtable };
-		const auto previous = vtable.write_vfunc(kPreDisplaySlot, &CookingPreDisplayHook);
+		const auto previous = vtable.WriteVirtualCall(kPreDisplaySlot, &CookingPreDisplayHook);
 		hook.preDisplay = reinterpret_cast<PCF::UIHookState::PreDisplayFunction>(previous);
 		return hook.preDisplay != nullptr &&
 			PCF::NativeHooks::IsVtableSlotSet(a_vtable, kPreDisplaySlot, replacement);

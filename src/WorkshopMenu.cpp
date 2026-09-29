@@ -838,14 +838,7 @@ namespace
 		if (!workshop || !workshop->workshopMenuBase) {
 			return WorkshopStatus::kMenuUnavailable;
 		}
-		if (RE::Workshop::CurrentRow.address() == 0) {
-			return WorkshopStatus::kCurrentRowUnavailable;
-		}
-		const auto* currentRow = RE::Workshop::CurrentRow.get();
-		if (!currentRow) {
-			return WorkshopStatus::kCurrentRowNull;
-		}
-		a_selection.row = *currentRow;
+		a_selection.row = RE::Workshop::GetCurrentRow();
 		a_selection.column = 0;
 		auto* node = RE::Workshop::GetSelectedWorkshopMenuNode(a_selection.row, a_selection.column);
 		if (!node) {
@@ -1569,7 +1562,7 @@ namespace
 			return false;
 		}
 		REL::Relocation<std::uintptr_t> vtable{ a_vtable };
-		const auto previous = vtable.write_vfunc(a_slot, a_replacement);
+		const auto previous = vtable.WriteVirtualCall(a_slot, a_replacement);
 		a_original = reinterpret_cast<Function>(previous);
 		return a_original != nullptr && PCF::NativeHooks::IsVtableSlotSet(a_vtable, a_slot, replacement);
 	}
@@ -1587,12 +1580,13 @@ namespace
 	// Finds the Workshop call that writes perkData.
 	std::uintptr_t FindPerkDataCall(std::uintptr_t a_owner, std::uintptr_t a_append, std::uintptr_t a_setMember)
 	{
-		const auto text = REL::Module::get().segment(REL::Segment::text);
-		const auto data = REL::Module::get().segment(REL::Segment::rdata);
-		if (a_owner < text.address() || a_owner - text.address() >= text.size()) {
+		const auto module = REL::Module::GetSingleton();
+		const auto text = module->GetSection(REL::MODULE_SECTION_NAME_TEXT);
+		const auto data = module->GetSection(REL::MODULE_SECTION_NAME_RDATA);
+		if (a_owner < text.GetAddress() || a_owner - text.GetAddress() >= text.GetSize()) {
 			return 0;
 		}
-		const auto available = (std::min)(text.size() - (a_owner - text.address()), std::size_t{ 65536 });
+		const auto available = (std::min)(text.GetSize() - (a_owner - text.GetAddress()), std::size_t{ 65536 });
 		ZydisDecoder decoder;
 		if (!ZYAN_SUCCESS(ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64))) {
 			return 0;
@@ -1626,8 +1620,8 @@ namespace
 				operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER && operands[0].reg.value == ZYDIS_REGISTER_R8 &&
 				operands[1].type == ZYDIS_OPERAND_TYPE_MEMORY && operands[1].mem.base == ZYDIS_REGISTER_RIP &&
 				ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(&instruction, &operands[1], address, &target)) &&
-				target >= data.address() && target - data.address() < data.size() &&
-				data.size() - (target - data.address()) >= sizeof("perkData") &&
+				target >= data.GetAddress() && target - data.GetAddress() < data.GetSize() &&
+				data.GetSize() - (target - data.GetAddress()) >= sizeof("perkData") &&
 				std::memcmp(reinterpret_cast<const void*>(target), "perkData", sizeof("perkData")) == 0) {
 				pending = 16;
 			}
@@ -1657,33 +1651,29 @@ namespace
 	{
 		constexpr std::size_t absoluteJumpSize = 14;
 		try {
-			const auto owner = REL::IDDatabase::get().resolve(PCF::EngineIDs::WorkshopPublishRequirements);
-			const auto append = REL::IDDatabase::get().resolve(PCF::EngineIDs::WorkshopAppendPerkRow);
-			const auto setMember = REL::IDDatabase::get().resolve(PCF::EngineIDs::GFxSetMember);
-			if (!owner || !append || !setMember) {
-				return false;
-			}
-			const auto base = REL::Module::get().base();
-			const auto call = FindPerkDataCall(base + *owner.rva, base + *append.rva, base + *setMember.rva);
+			const auto owner = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::WorkshopPublishRequirements }.GetAddress();
+			const auto append = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::WorkshopAppendPerkRow }.GetAddress();
+			const auto setMember = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::GFxSetMember }.GetAddress();
+			const auto call = FindPerkDataCall(owner, append, setMember);
 			if (!call) {
 				return false;
 			}
-			auto& trampoline = F4SE::GetTrampoline();
-			if (trampoline.empty()) {
+			auto& trampoline = **REL::GetTrampoline();
+			if (trampoline.IsEmpty()) {
 				constexpr std::size_t size = 64;
-				const auto* api = F4SE::GetTrampolineInterface();
-				auto* memory = api ? api->AllocateFromBranchPool(size) : nullptr;
+				const auto api = F4SE::GetTrampolineInterface();
+				auto* memory = static_cast<std::byte*>(api->AllocateFromBranchPool(size));
 				if (!memory) {
 					return false;
 				}
-				trampoline.set_trampoline(memory, size);
+				trampoline.Init(memory, size);
 			}
-			if (trampoline.free_size() < absoluteJumpSize) {
+			if (trampoline.GetFreeSize() < absoluteJumpSize) {
 				return false;
 			}
-			const auto expectedSetMember = base + *setMember.rva;
+			const auto expectedSetMember = setMember;
 			g_workshopSetMember = reinterpret_cast<WorkshopSetMemberFunction>(expectedSetMember);
-			const auto previous = trampoline.write_call<5>(call, &WorkshopSetPerkData);
+			const auto previous = trampoline.WriteCall<5>(call, &WorkshopSetPerkData);
 			if (previous) {
 				g_workshopSetMember = reinterpret_cast<WorkshopSetMemberFunction>(previous);
 			}
@@ -1692,7 +1682,7 @@ namespace
 				return true;
 			}
 			if (previous && PCF::NativeHooks::IsRelativeCallTo(call, replacement)) {
-				trampoline.write_call<5>(call, previous);
+				trampoline.WriteCall<5>(call, previous);
 				if (!PCF::NativeHooks::IsRelativeCallTo(call, previous)) {
 					spdlog::warn("Workshop artwork hook rollback could not be verified; PCF artwork behavior remains inactive");
 				}

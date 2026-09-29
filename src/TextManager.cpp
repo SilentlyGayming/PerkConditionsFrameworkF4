@@ -632,35 +632,33 @@ namespace
 		}
 		g_messageBodyHookAttempted = true;
 		try {
-			const auto resolved = REL::IDDatabase::get().resolve(PCF::EngineIDs::BGSMessageGetConvertedDescription);
-			if (!resolved) {
-				return DisableMessageTextHook();
-			}
-			const auto source = REL::Module::get().base() + *resolved.rva;
+			const auto source = REL::Relocation<std::uintptr_t>{
+				PCF::EngineIDs::BGSMessageGetConvertedDescription
+			}.GetAddress();
 			const auto prologueLength = GetMessageHookSize(source);
 			if (prologueLength < kMessageBodyPatchSize) {
 				return DisableMessageTextHook();
 			}
 
-			auto& trampoline = F4SE::GetTrampoline();
-			if (trampoline.empty()) {
-				const auto* trampolineInterface = F4SE::GetTrampolineInterface();
-				void* memory = trampolineInterface ? trampolineInterface->AllocateFromBranchPool(kMessageBodyTrampolineSize) : nullptr;
+			auto& trampoline = **REL::GetTrampoline();
+			if (trampoline.IsEmpty()) {
+				const auto trampolineInterface = F4SE::GetTrampolineInterface();
+				auto* memory = static_cast<std::byte*>(trampolineInterface->AllocateFromBranchPool(kMessageBodyTrampolineSize));
 				if (!memory) {
 					return DisableMessageTextHook();
 				}
-				trampoline.set_trampoline(memory, kMessageBodyTrampolineSize);
+				trampoline.Init(memory, kMessageBodyTrampolineSize);
 			}
-			if (trampoline.free_size() < prologueLength + (kAbsoluteJumpSize * 2)) {
+			if (trampoline.GetFreeSize() < prologueLength + (kAbsoluteJumpSize * 2)) {
 				return DisableMessageTextHook();
 			}
 
-			auto* original = static_cast<std::uint8_t*>(trampoline.allocate(prologueLength + kAbsoluteJumpSize));
+			auto* original = reinterpret_cast<std::uint8_t*>(trampoline.Allocate(prologueLength + kAbsoluteJumpSize));
 			std::memcpy(original, reinterpret_cast<const void*>(source), prologueLength);
 			WriteJump(original + prologueLength, source + prologueLength);
 			g_messageBodyOriginal = reinterpret_cast<MessageBodyFunction>(original);
 
-			auto* relay = static_cast<std::uint8_t*>(trampoline.allocate(kAbsoluteJumpSize));
+			auto* relay = reinterpret_cast<std::uint8_t*>(trampoline.Allocate(kAbsoluteJumpSize));
 			WriteJump(relay, reinterpret_cast<std::uintptr_t>(&MessageTextHook));
 			const auto nextInstruction = source + kMessageBodyPatchSize;
 			const auto displacement = reinterpret_cast<std::intptr_t>(relay) - static_cast<std::intptr_t>(nextInstruction);

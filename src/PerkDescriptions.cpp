@@ -515,29 +515,26 @@ namespace
 		}
 		g_descriptionHookAttempted = true;
 		try {
-			const auto resolved = REL::IDDatabase::get().resolve(PCF::EngineIDs::TESDescriptionGetDescription);
-			if (!resolved) {
-				spdlog::error("Descriptions: TESDescription::GetDescription relocation unavailable");
-				return false;
-			}
-			const auto source = REL::Module::get().base() + *resolved.rva;
+			const auto source = REL::Relocation<std::uintptr_t>{
+				PCF::EngineIDs::TESDescriptionGetDescription
+			}.GetAddress();
 			const auto prologueLength = PCF::NativeHooks::FindSafeOverwriteLength(source);
 			if (prologueLength < PCF::NativeHooks::kRelativeJumpSize) {
 				spdlog::error("Descriptions: TESDescription::GetDescription prologue is not safe to patch");
 				return false;
 			}
 
-			auto& trampoline = F4SE::GetTrampoline();
-			if (trampoline.empty()) {
-				const auto* trampolineInterface = F4SE::GetTrampolineInterface();
-				void* memory = trampolineInterface ? trampolineInterface->AllocateFromBranchPool(kTrampolineSize) : nullptr;
+			auto& trampoline = **REL::GetTrampoline();
+			if (trampoline.IsEmpty()) {
+				const auto trampolineInterface = F4SE::GetTrampolineInterface();
+				auto* memory = static_cast<std::byte*>(trampolineInterface->AllocateFromBranchPool(kTrampolineSize));
 				if (!memory) {
 					spdlog::error("Descriptions: trampoline allocation failed");
 					return false;
 				}
-				trampoline.set_trampoline(memory, kTrampolineSize);
+				trampoline.Init(memory, kTrampolineSize);
 			}
-			if (trampoline.free_size() < prologueLength + (PCF::NativeHooks::kAbsoluteJumpSize * 2)) {
+			if (trampoline.GetFreeSize() < prologueLength + (PCF::NativeHooks::kAbsoluteJumpSize * 2)) {
 				spdlog::error("Descriptions: trampoline does not have enough free space");
 				return false;
 			}
@@ -545,12 +542,12 @@ namespace
 			std::vector<std::uint8_t> originalBytes(prologueLength);
 			std::memcpy(originalBytes.data(), reinterpret_cast<const void*>(source), prologueLength);
 
-			auto* original = static_cast<std::uint8_t*>(trampoline.allocate(prologueLength + PCF::NativeHooks::kAbsoluteJumpSize));
+			auto* original = reinterpret_cast<std::uint8_t*>(trampoline.Allocate(prologueLength + PCF::NativeHooks::kAbsoluteJumpSize));
 			std::memcpy(original, originalBytes.data(), prologueLength);
 			PCF::NativeHooks::WriteAbsoluteJump(original + prologueLength, source + prologueLength);
 			g_descriptionOriginal = reinterpret_cast<DescriptionFunction>(original);
 
-			auto* relay = static_cast<std::uint8_t*>(trampoline.allocate(PCF::NativeHooks::kAbsoluteJumpSize));
+			auto* relay = reinterpret_cast<std::uint8_t*>(trampoline.Allocate(PCF::NativeHooks::kAbsoluteJumpSize));
 			PCF::NativeHooks::WriteAbsoluteJump(relay, reinterpret_cast<std::uintptr_t>(&DescriptionHook));
 			std::vector<std::uint8_t> patch;
 			if (!PCF::NativeHooks::MakeRelativeJumpPatch(source, reinterpret_cast<std::uintptr_t>(relay), prologueLength, patch)) {
@@ -604,7 +601,7 @@ namespace
 			}
 
 			REL::Relocation<std::uintptr_t> vtable{ g_pipboyVtableAddress };
-			vtable.write_vfunc(kPipboyUpdateSlot, g_pipboyUpdateOriginal);
+			vtable.WriteVirtualCall(kPipboyUpdateSlot, g_pipboyUpdateOriginal);
 			if (table[kPipboyUpdateSlot] != original) {
 				return false;
 			}
@@ -625,15 +622,12 @@ namespace
 		}
 		g_pipboyHookAttempted = true;
 		try {
-			const auto updateLookup = REL::IDDatabase::get().resolve(PCF::EngineIDs::PipboyPerksMenuUpdateData);
-			const auto vtableLookup = REL::IDDatabase::get().resolve(RE::VTABLE::PipboyPerksMenu[0]);
-			if (!updateLookup || !vtableLookup) {
-				spdlog::error("Descriptions: Pip-Boy update relocation or vtable unavailable");
-				return false;
-			}
-			const auto base = REL::Module::get().base();
-			const auto vtableAddress = base + *vtableLookup.rva;
-			const auto expectedUpdate = base + *updateLookup.rva;
+			const auto expectedUpdate = REL::Relocation<std::uintptr_t>{
+				PCF::EngineIDs::PipboyPerksMenuUpdateData
+			}.GetAddress();
+			const auto vtableAddress = REL::Relocation<std::uintptr_t>{
+				RE::VTABLE::PipboyPerksMenu[0]
+			}.GetAddress();
 			const auto* table = reinterpret_cast<const std::uintptr_t*>(vtableAddress);
 			if (table[kPipboyUpdateSlot] != expectedUpdate) {
 				spdlog::error("Descriptions: Pip-Boy update vtable slot does not match the proven runtime contract");
@@ -643,7 +637,7 @@ namespace
 			g_pipboyVtableAddress = vtableAddress;
 			g_pipboyUpdateOriginal = reinterpret_cast<PipboyUpdateFunction>(expectedUpdate);
 			REL::Relocation<std::uintptr_t> vtable{ vtableAddress };
-			const auto previous = vtable.write_vfunc(kPipboyUpdateSlot, &PipboyHook);
+			const auto previous = vtable.WriteVirtualCall(kPipboyUpdateSlot, &PipboyHook);
 			if (previous != expectedUpdate) {
 				if (previous) {
 					g_pipboyUpdateOriginal = reinterpret_cast<PipboyUpdateFunction>(previous);

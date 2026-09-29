@@ -109,15 +109,10 @@ namespace
 	}
 
 	// Resolves one runtime-database hook target and proves a safe whole-instruction overwrite span.
-	bool AddHookPlan(std::vector<HookPlan>& a_plans, HookKind a_kind, const REL::ID& a_id,
+	bool AddHookPlan(std::vector<HookPlan>& a_plans, HookKind a_kind, const REL::IId& a_id,
 		std::uintptr_t a_hook, std::string_view a_name)
 	{
-		const auto resolved = REL::IDDatabase::get().resolve(a_id);
-		if (!resolved) {
-			spdlog::error("Custom conditions: {} relocation unavailable; feature disabled", a_name);
-			return false;
-		}
-		const auto source = REL::Module::get().base() + *resolved.rva;
+		const auto source = REL::Relocation<std::uintptr_t>{ a_id }.GetAddress();
 		const auto stolenLength = PCF::NativeHooks::FindSafeOverwriteLength(source);
 		if (stolenLength < PCF::NativeHooks::kRelativeJumpSize) {
 			spdlog::error("Custom conditions: {} entry cannot be copied safely; feature disabled", a_name);
@@ -159,8 +154,8 @@ namespace
 		for (const auto& plan : plans) {
 			poolBytes += plan.stolenLength + (PCF::NativeHooks::kAbsoluteJumpSize * 2);
 		}
-		const auto* trampoline = F4SE::GetTrampolineInterface();
-		auto* memory = trampoline ? static_cast<std::uint8_t*>(trampoline->AllocateFromBranchPool(poolBytes)) : nullptr;
+		const auto trampoline = F4SE::GetTrampolineInterface();
+		auto* memory = reinterpret_cast<std::uint8_t*>(trampoline->AllocateFromBranchPool(poolBytes));
 		if (!memory) {
 			spdlog::error("Custom conditions: branch-pool allocation failed; feature disabled");
 			return false;

@@ -27,7 +27,7 @@ namespace PCF::UIHookState
 
 	struct MenuHook
 	{
-		REL::ID vtableID;
+		F4SE::VariantId vtableID;
 		std::string_view name;
 		CallFunction call{ nullptr };
 		ProcessMessageFunction processMessage{ nullptr };

@@ -11,8 +11,6 @@
 #include "CustomConditions.h"
 #include "UIManager.h"
 
-#include <spdlog/sinks/basic_file_sink.h>
-
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -26,38 +24,6 @@ namespace
 	{
 		const std::size_t width = 60 + (a_name.size() % 2);
 		spdlog::info("{:*^{}}", a_name, width);
-	}
-	// Builds the F4SE plugin information.
-	constexpr F4SE::PluginVersionData BuildVersionInfo()
-	{
-		F4SE::PluginVersionData data;
-		data.pluginVersion = ((static_cast<std::uint32_t>(Version::MAJOR) & 0xFF) << 24) |
-			((static_cast<std::uint32_t>(Version::MINOR) & 0xFF) << 16) |
-			((static_cast<std::uint32_t>(Version::PATCH) & 0xFFF) << 4);
-		for (std::size_t i = 0; i < Version::PROJECT.size() && i < std::size(data.name) - 1; ++i) {
-			data.name[i] = Version::PROJECT[i];
-		}
-		data.addressIndependence = F4SE::PluginVersionData::kAddressIndependence_Signatures;
-		data.structureIndependence = F4SE::PluginVersionData::kStructureIndependence_1_10_980Layout |
-			F4SE::PluginVersionData::kStructureIndependence_1_11_137Layout;
-		return data;
-	}
-	// Starts the PCF file logger.
-	bool StartLogger()
-	{
-		auto path = F4SE::log::log_directory();
-		if (!path) {
-			return false;
-		}
-		*path /= fmt::format("{}.log", Version::PROJECT);
-
-		auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path->string(), true);
-		auto logger = std::make_shared<spdlog::logger>("PCF", std::move(sink));
-		logger->set_level(spdlog::level::info);
-		logger->flush_on(spdlog::level::info);
-		spdlog::set_default_logger(std::move(logger));
-		spdlog::set_pattern("[%H:%M:%S:%e] %v");
-		return true;
 	}
 	// Loads PCF state when game data is ready and finishes INFO text after the game is created or loaded.
 	void OnGameReady(F4SE::MessagingInterface::Message* a_message)
@@ -82,15 +48,15 @@ namespace
 		if (!a_message || finished) {
 			return;
 		}
-		const bool gameDataReady = a_message->type == F4SE::MessagingInterface::kGameDataReady;
-		const bool newGameReady = a_message->type == F4SE::MessagingInterface::kNewGame;
-		const bool postLoadGame = a_message->type == F4SE::MessagingInterface::kPostLoadGame;
-		if (postLoadGame && !a_message->data) {
+		const bool gameDataReady = a_message->GetType() == F4SE::MessagingInterface::MessageType::kGameDataReady;
+		const bool newGameReady = a_message->GetType() == F4SE::MessagingInterface::MessageType::kNewGame;
+		const bool postLoadGame = a_message->GetType() == F4SE::MessagingInterface::MessageType::kPostLoadGame;
+		if (postLoadGame && !a_message->GetData()) {
 			return;
 		}
 		const bool gameStateReady = newGameReady || postLoadGame;
 		if (gameDataReady) {
-			if (!a_message->data) {
+			if (!a_message->GetData()) {
 				return;
 			}
 			dataReady = true;
@@ -253,28 +219,23 @@ namespace
 
 }
 
-extern "C"
-{
-	__declspec(dllexport) constinit F4SE::PluginVersionData F4SEPlugin_Version = BuildVersionInfo();
-}
 // Starts PCF through the F4SE plugin entry point.
-extern "C" __declspec(dllexport) bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
+F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
 {
 	if (!a_f4se || a_f4se->IsEditor()) {
 		return false;
 	}
 	try {
-		if (!StartLogger()) {
-			return false;
-		}
-		F4SE::Init(a_f4se);
-		spdlog::info("{} v{} on Fallout 4 {}", Version::PROJECT, Version::NAME, a_f4se->RuntimeVersion().string());
+		F4SE::InitInfo initInfo;
+		initInfo.logName = "PCF";
+		initInfo.logFileName = std::string(Version::PROJECT);
+		initInfo.logFormat = "[%H:%M:%S:%e] %v";
+
+		F4SE::Init(a_f4se, initInfo);
+		spdlog::info("{} v{} on Fallout 4 {}", Version::PROJECT, Version::NAME, F4SE::GetRuntimeVersion().ToString<char>());
 		PCF::DialogueText::InstallEarlyHooks();
-		auto* messaging = F4SE::GetMessagingInterface();
-		if (!messaging || !messaging->RegisterListener(OnGameReady)) {
-			spdlog::error("F4SE messaging unavailable");
-			return false;
-		}
+		const auto messaging = F4SE::GetMessagingInterface();
+		messaging->RegisterListener(OnGameReady);
 		return true;
 	} catch (const std::exception& error) {
 		spdlog::error("PCF load failed: {}", error.what());

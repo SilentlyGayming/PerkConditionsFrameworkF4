@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.2)
+cmake_minimum_required(VERSION 4.3)
 
 # ---- Options ----
 
@@ -37,6 +37,18 @@ project(
 	VERSION 1.0.0
 	LANGUAGES CXX
 )
+
+set(PROJECT_VERSION_TWEAK 0)
+
+set(COMMONLIB_PLUGIN_NAME "PerkConditionsFramework")
+set(COMMONLIB_PLUGIN_AUTHOR "SilentlyGayming")
+set(COMMONLIB_PLUGIN_LICENSE "MIT License")
+set(COMMONLIB_PLUGIN_DESCRIPTION "Perk Conditions Framework")
+
+set(COMMONLIB_RUNTIME_VR OFF CACHE BOOL "" FORCE)
+set(COMMONLIB_RUNTIME_OG OFF CACHE BOOL "" FORCE)
+set(COMMONLIB_RUNTIME_NG ON CACHE BOOL "" FORCE)
+set(COMMONLIB_RUNTIME_AE ON CACHE BOOL "" FORCE)
 
 if (NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 	message(FATAL_ERROR "The Fallout 4 DLL requires Windows x64 and the MSVC toolchain.")
@@ -82,8 +94,8 @@ if (NOT DEFINED CommonLibF4Path)
 	message(FATAL_ERROR "CommonLibF4Path is not set.")
 endif ()
 
-if (NOT EXISTS "${CommonLibF4Path}/CommonLibF4/CMakeLists.txt")
-	message(FATAL_ERROR "CommonLibF4RD was not found at: ${CommonLibF4Path}")
+if (NOT EXISTS "${CommonLibF4Path}/CMakeLists.txt")
+	message(FATAL_ERROR "CommonLibF4 AV was not found at: ${CommonLibF4Path}")
 endif ()
 
 if (NOT DEFINED TOMLPLUSPLUS_PATH)
@@ -94,8 +106,11 @@ if (NOT EXISTS "${TOMLPLUSPLUS_PATH}/toml.hpp")
 	message(FATAL_ERROR "toml.hpp was not found at: ${TOMLPLUSPLUS_PATH}")
 endif ()
 
+include("${CommonLibF4Path}/cmake/GenerateXsePluginInfo.cmake")
+generate_xse_plugin_info("${CommonLibF4Path}")
+
 if (NOT TARGET CommonLibF4)
-	add_subdirectory("${CommonLibF4Path}/CommonLibF4" CommonLibF4)
+	add_subdirectory("${CommonLibF4Path}" CommonLibF4)
 endif ()
 
 find_package(fmt REQUIRED CONFIG)
@@ -122,6 +137,7 @@ add_library(
 	${PROJECT_NAME}
 	SHARED
 	${SOURCES}
+	${XSE_PLUGIN_INFO_CPP_TARGET}
 	${CMAKE_CURRENT_BINARY_DIR}/version.rc
 	.clang-format
 )
@@ -135,13 +151,14 @@ target_compile_definitions(
 target_compile_features(
 	${PROJECT_NAME}
 	PRIVATE
-		cxx_std_20
+		cxx_std_23
 )
 
 target_include_directories(
 	${PROJECT_NAME}
 	PRIVATE
 		${CMAKE_CURRENT_BINARY_DIR}/hdr
+		${CMAKE_CURRENT_BINARY_DIR}/include
 		${CMAKE_CURRENT_SOURCE_DIR}/hdr
 		${TOMLPLUSPLUS_PATH}
 )

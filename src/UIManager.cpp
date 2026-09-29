@@ -40,11 +40,7 @@ namespace PCF::UIManager
 		auto& hooks = PCF::UIHookState::GetHooks();
 		for (std::size_t i = 0; i < hooks.size(); ++i) {
 			auto& hook = hooks[i];
-			const auto resolved = REL::IDDatabase::get().resolve(hook.vtableID);
-			if (!resolved) {
-				return fail(fmt::format("{} vtable: {}", hook.name, REL::id_resolve_status_text(resolved.status)));
-			}
-			vtables[i] = REL::Module::get().base() + *resolved.rva;
+			vtables[i] = REL::Relocation<std::uintptr_t>{ hook.vtableID }.GetAddress();
 			const auto* table = reinterpret_cast<const std::uintptr_t*>(vtables[i]);
 			if (i == kWorkshopIndex) {
 				if (!table[kCallSlot] || !table[kProcessMessageSlot] || !table[kAdvanceSlot] || !table[kPreDisplaySlot]) {
@@ -60,11 +56,8 @@ namespace PCF::UIManager
 			}
 		}
 
-		const auto inputLookup = REL::IDDatabase::get().resolve(RE::VTABLE::WorkshopMenu[1]);
-		if (!inputLookup) {
-			return fail(fmt::format("WorkshopMenu input vtable: {}", REL::id_resolve_status_text(inputLookup.status)));
-		}
-		const auto inputVtable = REL::Module::get().base() + *inputLookup.rva;
+		const auto inputVtable =
+			REL::Relocation<std::uintptr_t>{ RE::VTABLE::WorkshopMenu[1] }.GetAddress();
 		const auto* inputTable = reinterpret_cast<const std::uintptr_t*>(inputVtable);
 		if (!inputTable[kButtonEventSlot]) {
 			return fail("WorkshopMenu ButtonEvent callback");
