@@ -120,7 +120,7 @@ namespace
 		}
 		const auto* files = a_form->sourceFiles.array;
 		return files && !files->empty() && (*files)[0] &&
-			_stricmp((*files)[0]->GetFilename().data(), a_plugin.c_str()) == 0;
+			_stricmp((*files)[0]->filename.data(), a_plugin.c_str()) == 0;
 	}
 	// Builds a lookup table for configured EditorIDs by plugin.
 	void BuildEditorIDIndex(RE::TESDataHandler* a_data, FormCache& a_cache, Diagnostics& a_diagnostics)
@@ -135,12 +135,12 @@ namespace
 			if (!files || files->empty() || !(*files)[0] || !editorID || !editorID[0]) {
 				return;
 			}
-			const auto key = MakeReferenceKey((*files)[0]->GetFilename(), editorID);
+			const auto key = MakeReferenceKey((*files)[0]->filename.data(), editorID);
 			auto [entry, inserted] = a_cache.try_emplace(key, a_form);
 			if (!inserted && entry->second != a_form) {
 				entry->second = nullptr;
 				a_diagnostics.push_back(fmt::format("Ambiguous EditorID {} in originating plugin {}; use a FormID",
-					editorID, (*files)[0]->GetFilename()));
+					editorID, (*files)[0]->filename.data()));
 			}
 		};
 
@@ -179,18 +179,18 @@ namespace
 			if (!a_data) {
 				return nullptr;
 			}
-			const auto* file = a_data->LookupModByName(a_plugin);
+			const auto* file = a_data->FindFileByName(a_plugin);
 			if (!file) {
 				warn("Missing plugin for", a_plugin, a_reference);
 				a_cache.emplace(key, nullptr);
 				return nullptr;
 			}
-			if ((formID >> 24) != 0 && !file->IsFormInMod(formID)) {
+			if ((formID >> 24) != 0 && !file->IsFormInFile(formID)) {
 				warn("Full FormID does not belong to named plugin for", a_plugin, a_reference);
 				a_cache.emplace(key, nullptr);
 				return nullptr;
 			}
-			auto* form = a_data->LookupForm(GetLocalFormID(file, formID), a_plugin);
+			auto* form = a_data->FindForm(GetLocalFormID(file, formID), a_plugin);
 			if (!SamePlugin(form, a_plugin)) {
 				form = nullptr;
 			}
@@ -707,7 +707,7 @@ namespace PCF::RuleRegistry
 						raw.file.filename().string(), raw.line, a_kind, a_plugin, a_reference));
 					return nullptr;
 				}
-				if (const auto* file = data->LookupModByName(a_plugin); file && file->IsLight() && localFormID > 0x00000FFF) {
+				if (const auto* file = data->FindFileByName(a_plugin); file && file->IsLight() && localFormID > 0x00000FFF) {
 					diagnostics.push_back(fmt::format("{}:{} - RequirementLabels {} FormID exceeds the local range of light plugin {}: {}",
 						raw.file.filename().string(), raw.line, a_kind, a_plugin, a_reference));
 					return nullptr;
@@ -748,7 +748,7 @@ namespace PCF::RuleRegistry
 					raw.file.filename().string(), raw.line, raw.plugin, raw.formReference));
 				continue;
 			}
-			if (const auto* file = data->LookupModByName(raw.plugin); file && file->IsLight() && localFormID > 0x00000FFF) {
+			if (const auto* file = data->FindFileByName(raw.plugin); file && file->IsLight() && localFormID > 0x00000FFF) {
 				diagnostics.push_back(fmt::format("{}:{} - Actor Value description FormID exceeds the local range of light plugin {}: {}",
 					raw.file.filename().string(), raw.line, raw.plugin, raw.formReference));
 				continue;
@@ -875,14 +875,14 @@ namespace PCF::RuleRegistry
 			}
 
 			std::uint32_t configuredFormID = target ? target->GetFormID() : 0;
-			const auto* file = data ? data->LookupModByName(raw.targetPlugin) : nullptr;
+			const auto* file = data ? data->FindFileByName(raw.targetPlugin) : nullptr;
 			if (!configuredFormID && !ReadFormID(raw.targetReference, configuredFormID)) {
 				diagnostics.insert(diagnostics.end(), targetAttemptDiagnostics.begin(), targetAttemptDiagnostics.end());
 				diagnostics.push_back(fmt::format("{}:{} - Rejected entire [Conditions] target because it could not be resolved: {} | {}",
 					raw.file.filename().string(), raw.line, raw.targetPlugin, raw.targetReference));
 				continue;
 			}
-			if (file && ((configuredFormID >> 24) == 0 || file->IsFormInMod(configuredFormID))) {
+			if (file && ((configuredFormID >> 24) == 0 || file->IsFormInFile(configuredFormID))) {
 				configuredFormID = GetLocalFormID(file, configuredFormID);
 			}
 
@@ -934,7 +934,9 @@ namespace PCF::RuleRegistry
 				resolved.questStage = static_cast<std::uint16_t>(raw.requiredValue);
 				resolved.value.comparison = raw.comparison;
 				resolved.value.requiredValue = raw.requiredValue;
-				resolved.value.name = RE::TESFullName::GetFullName(*form, false);
+				if (const auto fullName = RE::TESFullName::GetFormFullName(form); fullName && fullName->data()) {
+					resolved.value.name = fullName->data();
+				}
 				if (resolved.value.name.empty()) {
 					resolved.value.name = fmt::format("{}|{}", raw.conditionPlugin, raw.conditionReference);
 				}
@@ -983,7 +985,9 @@ namespace PCF::RuleRegistry
 				const char* editorID = condition.globalValue->formEditorID.c_str();
 				condition.name = editorID && editorID[0] ? editorID : fmt::format("{}|{}", raw.conditionPlugin, raw.conditionReference);
 			} else {
-				condition.name = RE::TESFullName::GetFullName(*form, false);
+				if (const auto fullName = RE::TESFullName::GetFormFullName(form); fullName && fullName->data()) {
+					condition.name = fullName->data();
+				}
 				if (condition.name.empty()) {
 					condition.name = raw.conditionReference;
 				}
@@ -1128,7 +1132,9 @@ namespace PCF::RuleRegistry
 				alternative.name = editorID && editorID[0] ? editorID :
 					fmt::format("{}|{}", raw.alternativePlugin, raw.alternativeReference);
 			} else {
-				alternative.name = RE::TESFullName::GetFullName(*form, false);
+				if (const auto fullName = RE::TESFullName::GetFormFullName(form); fullName && fullName->data()) {
+					alternative.name = fullName->data();
+				}
 				if (alternative.name.empty()) {
 					alternative.name = raw.alternativeReference;
 				}
@@ -1254,24 +1260,24 @@ namespace PCF::RuleRegistry
 					pending.file.filename().string(), pending.line, pending.targetPlugin, pending.targetReference));
 				continue;
 			}
-			const auto* file = data->LookupModByName(pending.targetPlugin);
+			const auto* file = data->FindFileByName(pending.targetPlugin);
 			if (!file) {
 				diagnostics.push_back(fmt::format("{}:{} - Missing plugin for deferred Custom condition INFO target: {} | {}",
 					pending.file.filename().string(), pending.line, pending.targetPlugin, pending.targetReference));
 				continue;
 			}
-			if ((pending.configuredFormID >> 24) != 0 && !file->IsFormInMod(pending.configuredFormID)) {
+			if ((pending.configuredFormID >> 24) != 0 && !file->IsFormInFile(pending.configuredFormID)) {
 				diagnostics.push_back(fmt::format("{}:{} - Full FormID does not belong to named plugin for deferred Custom condition INFO target: {} | {}",
 					pending.file.filename().string(), pending.line, pending.targetPlugin, pending.targetReference));
 				continue;
 			}
 
 			const auto localFormID = GetLocalFormID(file, pending.configuredFormID);
-			const auto runtimeFormID = data->LookupFormID(localFormID, pending.targetPlugin);
-			const auto found = runtimeFormID ? loadedInfosByFormID.find(runtimeFormID) : loadedInfosByFormID.end();
+			const auto runtimeFormID = data->FindFormID(localFormID, pending.targetPlugin);
+			const auto found = runtimeFormID ? loadedInfosByFormID.find(*runtimeFormID) : loadedInfosByFormID.end();
 			if (found == loadedInfosByFormID.end() || !found->second) {
 				diagnostics.push_back(fmt::format("{}:{} - [Conditions] target did not resolve in the loaded INFO graph (runtime FormID {:08X}): {} | {}",
-					pending.file.filename().string(), pending.line, runtimeFormID, pending.targetPlugin, pending.targetReference));
+					pending.file.filename().string(), pending.line, runtimeFormID.value_or(0), pending.targetPlugin, pending.targetReference));
 				continue;
 			}
 			if (!PCF::CustomConditions::Add(found->second, std::move(pending.conditions))) {

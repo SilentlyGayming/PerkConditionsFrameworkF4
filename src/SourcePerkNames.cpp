@@ -437,7 +437,7 @@ namespace
 				}
 			}
 
-			return _stream->binary_read(a_buffer, a_size) == a_size;
+			return _stream->read(static_cast<char*>(a_buffer), static_cast<std::uint32_t>(a_size));
 		}
 
 	private:
@@ -499,10 +499,10 @@ namespace PCF::SourcePerkNames
 				continue;
 			}
 			auto* file = source->GetFile(0);
-			if (!file || file->GetFilename().empty()) {
+			if (!file || file->filename[0] == '\0') {
 				continue;
 			}
-			const auto filename = std::string(file->GetFilename());
+			const auto filename = std::string(file->filename.data());
 			auto& group = groups[ToLower(filename)];
 			if (group.filename.empty()) {
 				group.filename = filename;

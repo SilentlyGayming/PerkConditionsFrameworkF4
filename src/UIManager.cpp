@@ -40,7 +40,7 @@ namespace PCF::UIManager
 		auto& hooks = PCF::UIHookState::GetHooks();
 		for (std::size_t i = 0; i < hooks.size(); ++i) {
 			auto& hook = hooks[i];
-			vtables[i] = REL::Relocation<std::uintptr_t>{ hook.vtableID }.GetAddress();
+			vtables[i] = REL::Relocation<std::uintptr_t>{ *hook.vtableID }.GetAddress();
 			const auto* table = reinterpret_cast<const std::uintptr_t*>(vtables[i]);
 			if (i == kWorkshopIndex) {
 				if (!table[kCallSlot] || !table[kProcessMessageSlot] || !table[kAdvanceSlot] || !table[kPreDisplaySlot]) {

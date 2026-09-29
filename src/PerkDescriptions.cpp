@@ -32,9 +32,9 @@
 
 namespace
 {
-	using DescriptionFunction = void (*)(RE::TESDescription*, RE::BSStringT<char>&, const RE::TESForm*);
+	using DescriptionFunction = void (*)(RE::TESDescription*, RE::BSString&, const RE::TESForm*);
 	using PipboyUpdateFunction = void (*)(RE::PipboyPerksMenu*);
-	using Value = RE::Scaleform::GFx::Value;
+	using Value = Scaleform::GFx::Value;
 
 	DescriptionFunction g_descriptionOriginal{ nullptr };
 	PipboyUpdateFunction g_pipboyUpdateOriginal{ nullptr };
@@ -63,10 +63,10 @@ namespace
 		std::uint16_t capacity{ 0 };
 	};
 
-	static_assert(sizeof(BSStringStorage) == sizeof(RE::BSStringT<char>));
+	static_assert(sizeof(BSStringStorage) == sizeof(RE::BSString));
 
 	// Replaces a game string while keeping Bethesda memory ownership intact.
-	bool SetDescription(RE::BSStringT<char>& a_output, std::string_view a_description)
+	bool SetDescription(RE::BSString& a_output, std::string_view a_description)
 	{
 		if (a_description.size() >= (std::numeric_limits<std::uint16_t>::max)()) {
 			return false;
@@ -216,7 +216,7 @@ namespace
 		if (!g_descriptionOriginal || !a_perk) {
 			return {};
 		}
-		RE::BSStringT<char> native;
+		RE::BSString native;
 		g_descriptionOriginal(static_cast<RE::TESDescription*>(a_perk), native, a_perk);
 		return native.c_str() ? std::string(native.c_str(), native.size()) : std::string{};
 	}
@@ -346,7 +346,7 @@ namespace
 	}
 
 	// Applies a configured replacement after native description resolution.
-	bool ApplyConfiguredDescription(RE::TESDescription* a_description, RE::BSStringT<char>& a_output, RE::BGSPerk* a_prkfContext)
+	bool ApplyConfiguredDescription(RE::TESDescription* a_description, RE::BSString& a_output, RE::BGSPerk* a_prkfContext)
 	{
 		if (!g_descriptionBehaviorActive) {
 			return false;
@@ -371,7 +371,7 @@ namespace
 	}
 
 	// Replaces configured text through the shared native TESDescription path.
-	void DescriptionHook(RE::TESDescription* a_description, RE::BSStringT<char>& a_output, const RE::TESForm* a_form)
+	void DescriptionHook(RE::TESDescription* a_description, RE::BSString& a_output, const RE::TESForm* a_form)
 	{
 		if (!g_descriptionOriginal) {
 			return;
@@ -382,7 +382,7 @@ namespace
 	}
 
 	// Handles PRKF's main LevelUpMenu description call using the source perk PRKF already keeps in RDI.
-	void PRKFDescriptionHook(RE::TESDescription* a_description, RE::BSStringT<char>& a_output, const RE::TESForm* a_form)
+	void PRKFDescriptionHook(RE::TESDescription* a_description, RE::BSString& a_output, const RE::TESForm* a_form)
 	{
 		if (!g_descriptionOriginal) {
 			return;
@@ -601,7 +601,7 @@ namespace
 			}
 
 			REL::Relocation<std::uintptr_t> vtable{ g_pipboyVtableAddress };
-			vtable.WriteVirtualCall(kPipboyUpdateSlot, g_pipboyUpdateOriginal);
+			vtable.WriteVirtualCall(kPipboyUpdateSlot, original);
 			if (table[kPipboyUpdateSlot] != original) {
 				return false;
 			}
@@ -637,7 +637,7 @@ namespace
 			g_pipboyVtableAddress = vtableAddress;
 			g_pipboyUpdateOriginal = reinterpret_cast<PipboyUpdateFunction>(expectedUpdate);
 			REL::Relocation<std::uintptr_t> vtable{ vtableAddress };
-			const auto previous = vtable.WriteVirtualCall(kPipboyUpdateSlot, &PipboyHook);
+			const auto previous = vtable.WriteVirtualCall(kPipboyUpdateSlot, reinterpret_cast<std::uintptr_t>(&PipboyHook));
 			if (previous != expectedUpdate) {
 				if (previous) {
 					g_pipboyUpdateOriginal = reinterpret_cast<PipboyUpdateFunction>(previous);

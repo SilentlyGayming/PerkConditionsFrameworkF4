@@ -15,7 +15,7 @@
 
 namespace PCF::UICommon
 {
-	using Value = RE::Scaleform::GFx::Value;
+	using Value = Scaleform::GFx::Value;
 
 	class DepthGuard
 	{

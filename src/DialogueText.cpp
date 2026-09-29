@@ -155,7 +155,7 @@ namespace
 		const auto* file = files && !files->empty() ? (*files)[0] : nullptr;
 		if (file) {
 			const auto localID = file->IsLight() ? formID & 0x00000FFF : formID & 0x00FFFFFF;
-			return fmt::format("{}|{:08X}", file->GetFilename(), localID);
+			return fmt::format("{}|{:08X}", file->filename.data(), localID);
 		}
 		return fmt::format("{:08X}", formID);
 	}
@@ -172,7 +172,7 @@ namespace
 		if (!origin) {
 			return DescribeForm(a_info);
 		}
-		const auto originName = origin->GetFilename();
+		const auto originName = origin->filename.data();
 		const auto localID = origin->IsLight() ? formID & 0x00000FFF : formID & 0x00FFFFFF;
 		if (!a_providerPlugin.empty() && a_providerPlugin != originName) {
 			return fmt::format("{}|{}|{:08X}", a_providerPlugin, originName, localID);
@@ -245,8 +245,9 @@ namespace
 				if (!a_perk) {
 					return false;
 				}
-				const auto name = RE::TESFullName::GetFullName(*a_perk, false);
-				return !name.empty() && SameRequirementText(a_marker, name);
+				const auto fullName = RE::TESFullName::GetFormFullName(a_perk);
+				const char* name = fullName ? fullName->data() : nullptr;
+				return name && name[0] && SameRequirementText(a_marker, name);
 			};
 			if (matches(source)) {
 				return true;
@@ -420,7 +421,7 @@ namespace
 						auto* topic = storedTopic;
 						const auto raw = reinterpret_cast<std::uintptr_t>(storedTopic);
 						if (raw && raw <= std::numeric_limits<std::uint32_t>::max()) {
-							topic = RE::TESForm::GetFormByID<RE::TESTopic>(static_cast<std::uint32_t>(raw));
+							topic = RE::TESForm::FindFormByID<RE::TESTopic>(static_cast<std::uint32_t>(raw));
 						}
 						if (topic) {
 							topics.insert(topic->GetFormID());
@@ -518,7 +519,7 @@ namespace
 			return;
 		}
 		std::scoped_lock lock(g_infoPromptMutex);
-		g_responseProviders[a_response] = std::string(a_file->GetFilename());
+		g_responseProviders[a_response] = std::string(a_file->filename.data());
 	}
 
 	// Lets the RNAM insert continue and saves its source before the temporary text is released.
@@ -540,7 +541,7 @@ namespace
 			std::scoped_lock lock(g_infoPromptMutex);
 			g_directPromptCaptures.try_emplace(info->GetFormID(), direct);
 			if (providerFile) {
-				g_directPromptProviders[info->GetFormID()] = std::string(providerFile->GetFilename());
+				g_directPromptProviders[info->GetFormID()] = std::string(providerFile->filename.data());
 			}
 		}
 		return inserted;
@@ -990,7 +991,7 @@ namespace
 				g_startupPendingInfos.clear();
 			}
 			for (const auto formID : deferred) {
-				if (auto* info = RE::TESForm::GetFormByID<RE::TESTopicInfo>(formID)) {
+				if (auto* info = RE::TESForm::FindFormByID<RE::TESTopicInfo>(formID)) {
 					UpdateInfo(info, std::addressof(a_infoLogLines));
 				}
 			}
@@ -1115,7 +1116,7 @@ namespace
 			const auto insertReplacement = reinterpret_cast<std::uintptr_t>(&RNAMInsertHook);
 			const auto initReplacement = reinterpret_cast<std::uintptr_t>(&InfoLoadHook);
 
-			const auto previousRNAMLoad = trampoline.WriteCall<5>(rnamLoadCallsite, &RNAMLoadHook);
+			const auto previousRNAMLoad = trampoline.WriteCall<5>(rnamLoadCallsite, reinterpret_cast<std::uintptr_t>(&RNAMLoadHook));
 			if (previousRNAMLoad) {
 				g_rnamLocalizedLoadOriginal = reinterpret_cast<LocalizedSubrecordLoadFunction>(previousRNAMLoad);
 			}
@@ -1125,7 +1126,7 @@ namespace
 				return DisableInfoHooks("RNAM localized-load hook write could not be verified");
 			}
 
-			const auto previousResponseLoad = trampoline.WriteCall<5>(responseLoadCallsite, &ResponseLoadHook);
+			const auto previousResponseLoad = trampoline.WriteCall<5>(responseLoadCallsite, reinterpret_cast<std::uintptr_t>(&ResponseLoadHook));
 			if (previousResponseLoad) {
 				g_responseTextLoadOriginal = reinterpret_cast<ResponseTextLoadFunction>(previousResponseLoad);
 			}
@@ -1136,7 +1137,7 @@ namespace
 				return DisableInfoHooks("response-text load hook write could not be verified");
 			}
 
-			const auto previousInsert = trampoline.WriteCall<5>(captureCallsite, &RNAMInsertHook);
+			const auto previousInsert = trampoline.WriteCall<5>(captureCallsite, reinterpret_cast<std::uintptr_t>(&RNAMInsertHook));
 			if (previousInsert) {
 				g_rnamInsertOriginal = reinterpret_cast<RNAMInsertFunction>(previousInsert);
 			}
@@ -1148,7 +1149,7 @@ namespace
 				return DisableInfoHooks("RNAM insertion hook write could not be verified");
 			}
 
-			const auto previousInit = vtable.WriteVirtualCall(kInfoInitVtableSlot, &InfoLoadHook);
+			const auto previousInit = vtable.WriteVirtualCall(kInfoInitVtableSlot, reinterpret_cast<std::uintptr_t>(&InfoLoadHook));
 			if (previousInit) {
 				g_infoInitOriginal = reinterpret_cast<InfoInitFunction>(previousInit);
 			}

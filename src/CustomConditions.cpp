@@ -88,7 +88,7 @@ namespace
 			// COBJ has no effective native CTDAs, so this visibility stage must pass; Workshop's later
 			// full TESCondition::IsTrue call enforces the complete PCF replacement set.
 			if (set->owner == PCF::CustomConditions::OwnerKind::kCrafting &&
-				a_excludedFunction == RE::SCRIPT_OUTPUT::FUNCTION_HAS_PERK) {
+				static_cast<std::uint32_t>(a_excludedFunction) == 448) {
 				return true;
 			}
 			return PCF::CustomConditions::Evaluate(*set);
@@ -404,7 +404,7 @@ namespace PCF::CustomConditions
 				set.conditions.begin(), set.conditions.end(), [](const Condition& condition) { return IsPlayerFacing(condition); }));
 			if (set.owner == OwnerKind::kCrafting && visibleConditionCount > 2) {
 				const auto* files = set.target ? set.target->sourceFiles.array : nullptr;
-				const auto plugin = files && !files->empty() && (*files)[0] ? (*files)[0]->GetFilename() : std::string_view{ "unknown" };
+				const auto plugin = files && !files->empty() && (*files)[0] ? (*files)[0]->filename.data() : std::string_view{ "unknown" };
 				if (visibleConditionCount > 4) {
 					spdlog::warn("Custom conditions: {} [{:08X}] has {} player-facing condition(s); crafting UI displays up to 4 and Workshop UI up to 2 when applicable; gameplay evaluates all {} condition(s)",
 						plugin, set.target ? set.target->GetFormID() : 0, visibleConditionCount, set.conditions.size());
@@ -610,7 +610,7 @@ namespace PCF::CustomConditions
 				native.data.value = 1.0F;
 				native.data.functionData.function = static_cast<RE::SCRIPT_OUTPUT>(59);
 				native.data.functionData.param[1] = reinterpret_cast<void*>(static_cast<std::uintptr_t>(a_condition.questStage));
-				native.data.condition = RE::ENUM_COMPARISON_CONDITION::kEqual;
+				native.data.condition = static_cast<std::uint8_t>(RE::ENUM_COMPARISON_CONDITION::kEqual);
 			} else {
 				// GetStage(Quest) is compared numerically by the native CTDA operator.
 				native.data.value = static_cast<float>(a_condition.questStage);
@@ -618,19 +618,19 @@ namespace PCF::CustomConditions
 				native.data.functionData.param[1] = nullptr;
 				switch (a_condition.value.comparison) {
 				case ComparisonOp::kEqual:
-					native.data.condition = RE::ENUM_COMPARISON_CONDITION::kEqual;
+					native.data.condition = static_cast<std::uint8_t>(RE::ENUM_COMPARISON_CONDITION::kEqual);
 					break;
 				case ComparisonOp::kGreater:
-					native.data.condition = RE::ENUM_COMPARISON_CONDITION::kGreaterThan;
+					native.data.condition = static_cast<std::uint8_t>(RE::ENUM_COMPARISON_CONDITION::kGreaterThan);
 					break;
 				case ComparisonOp::kGreaterEqual:
-					native.data.condition = RE::ENUM_COMPARISON_CONDITION::kGreaterThanEqual;
+					native.data.condition = static_cast<std::uint8_t>(RE::ENUM_COMPARISON_CONDITION::kGreaterThanEqual);
 					break;
 				case ComparisonOp::kLess:
-					native.data.condition = RE::ENUM_COMPARISON_CONDITION::kLessThan;
+					native.data.condition = static_cast<std::uint8_t>(RE::ENUM_COMPARISON_CONDITION::kLessThan);
 					break;
 				case ComparisonOp::kLessEqual:
-					native.data.condition = RE::ENUM_COMPARISON_CONDITION::kLessThanEqual;
+					native.data.condition = static_cast<std::uint8_t>(RE::ENUM_COMPARISON_CONDITION::kLessThanEqual);
 					break;
 				}
 			}

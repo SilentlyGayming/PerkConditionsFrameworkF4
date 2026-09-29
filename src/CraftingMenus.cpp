@@ -49,9 +49,9 @@ namespace
 		if (file) {
 			const auto localID = file->IsLight() ? formID & 0x00000FFF : formID & 0x00FFFFFF;
 			if (editorID && editorID[0]) {
-				return fmt::format("{}|{:08X} editorID={}", file->GetFilename(), localID, editorID);
+				return fmt::format("{}|{:08X} editorID={}", file->filename.data(), localID, editorID);
 			}
-			return fmt::format("{}|{:08X}", file->GetFilename(), localID);
+			return fmt::format("{}|{:08X}", file->filename.data(), localID);
 		}
 		if (editorID && editorID[0]) {
 			return fmt::format("{:08X} editorID={}", formID, editorID);
@@ -308,7 +308,7 @@ namespace
 	bool BuildArtworkPlan(RE::IMenu* a_menu, ArtworkPlan& a_plan)
 	{
 		a_plan = {};
-		auto* workbench = RE::fallout_cast<RE::WorkbenchMenuBase*>(a_menu);
+		auto* workbench = static_cast<RE::WorkbenchMenuBase*>(a_menu);
 		Value list;
 		if (!workbench || !a_menu || !a_menu->menuObj.IsObject() ||
 			!a_menu->menuObj.GetMember("ModListObject", &list) || !list.IsObject() ||
@@ -365,7 +365,7 @@ namespace
 	// Checks whether the artwork still matches the current selection.
 	bool ArtworkMatchesSelection(RE::IMenu* a_menu, const ArtworkPlan& a_plan)
 	{
-		auto* workbench = RE::fallout_cast<RE::WorkbenchMenuBase*>(a_menu);
+		auto* workbench = static_cast<RE::WorkbenchMenuBase*>(a_menu);
 		Value list;
 		std::uint32_t selected = 0;
 		if (!workbench || !a_menu || !a_menu->menuObj.IsObject() ||
@@ -849,7 +849,7 @@ namespace
 		if (!a_menu) {
 			return nullptr;
 		}
-		auto* workbench = RE::fallout_cast<RE::WorkbenchMenuBase*>(a_menu);
+		auto* workbench = static_cast<RE::WorkbenchMenuBase*>(a_menu);
 		if (!workbench || !a_menu->menuObj.IsObject()) {
 			return nullptr;
 		}
@@ -886,7 +886,7 @@ namespace
 	bool UpdateCraftingRows(RE::IMenu* a_menu, ArtworkPlan* a_artworkPlan = nullptr,
 		std::size_t a_artworkMenuIndex = kExamineIndex)
 	{
-		auto* workbench = RE::fallout_cast<RE::WorkbenchMenuBase*>(a_menu);
+		auto* workbench = static_cast<RE::WorkbenchMenuBase*>(a_menu);
 		if (!workbench || !a_menu->menuObj.IsObject()) {
 			return false;
 		}
@@ -1393,7 +1393,7 @@ namespace
 			return false;
 		}
 		REL::Relocation<std::uintptr_t> vtable{ a_vtable };
-		const auto previous = vtable.WriteVirtualCall(kCallSlot, &CraftingMenuCallHook<Index>);
+		const auto previous = vtable.WriteVirtualCall(kCallSlot, reinterpret_cast<std::uintptr_t>(&CraftingMenuCallHook<Index>));
 		hook.call = reinterpret_cast<CallFunction>(previous);
 		return hook.call != nullptr && PCF::NativeHooks::IsVtableSlotSet(a_vtable, kCallSlot, replacement);
 	}
@@ -1411,7 +1411,7 @@ namespace
 			return false;
 		}
 		REL::Relocation<std::uintptr_t> vtable{ a_vtable };
-		const auto previous = vtable.WriteVirtualCall(kPreDisplaySlot, &CookingPreDisplayHook);
+		const auto previous = vtable.WriteVirtualCall(kPreDisplaySlot, reinterpret_cast<std::uintptr_t>(&CookingPreDisplayHook));
 		hook.preDisplay = reinterpret_cast<PCF::UIHookState::PreDisplayFunction>(previous);
 		return hook.preDisplay != nullptr &&
 			PCF::NativeHooks::IsVtableSlotSet(a_vtable, kPreDisplaySlot, replacement);

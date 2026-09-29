@@ -189,6 +189,7 @@ target_compile_options(
 		/Zc:preprocessor	# Enable preprocessor conformance mode
 
 		/W4	# Warning level
+		/wd5311
 		/WX	# Warning level (warnings are errors)
 
 		"$<$<CONFIG:RELEASE>:/Zc:inline;/JMC->"

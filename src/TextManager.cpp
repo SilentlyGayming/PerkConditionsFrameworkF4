@@ -62,7 +62,7 @@ namespace
 		const auto* file = files && !files->empty() ? (*files)[0] : nullptr;
 		if (file) {
 			const auto localID = file->IsLight() ? formID & 0x00000FFF : formID & 0x00FFFFFF;
-			return fmt::format("{}|{:08X}", file->GetFilename(), localID);
+			return fmt::format("{}|{:08X}", file->filename.data(), localID);
 		}
 		return fmt::format("{:08X}", formID);
 	}
@@ -71,8 +71,9 @@ namespace
 	std::string GetFormName(const RE::TESForm* a_form, std::string_view a_fallback)
 	{
 		if (a_form) {
-			const auto name = RE::TESFullName::GetFullName(*a_form, false);
-			if (!name.empty()) {
+			const auto fullName = RE::TESFullName::GetFormFullName(a_form);
+			const char* name = fullName ? fullName->data() : nullptr;
+			if (name && name[0]) {
 				return std::string(name);
 			}
 			const char* editorID = a_form->GetFormEditorID();
@@ -89,8 +90,9 @@ namespace
 		if (!a_form) {
 			return {};
 		}
-		const auto name = RE::TESFullName::GetFullName(*a_form, false);
-		return name.empty() ? std::string{} : std::string(name);
+		const auto fullName = RE::TESFullName::GetFormFullName(a_form);
+		const char* name = fullName ? fullName->data() : nullptr;
+		return name && name[0] ? std::string(name) : std::string{};
 	}
 
 	// Compares visible names without caring about letter case.
@@ -465,7 +467,7 @@ namespace
 			return false;
 		}
 		const auto function = static_cast<std::uint32_t>(a_item->data.functionData.function.get());
-		const auto hasPerk = static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::FUNCTION_HAS_PERK);
+		const auto hasPerk = std::uint32_t{ 448 };
 		return function == hasPerk || function == hasPerk - 0x1000;
 	}
 
@@ -733,9 +735,9 @@ namespace
 			const auto value = static_cast<std::uint32_t>(a_expected);
 			return function == value || (value >= 0x1000 && function == value - 0x1000);
 		};
-		if (!matches(RE::SCRIPT_OUTPUT::FUNCTION_GET_ACTOR_VALUE) &&
-			!matches(RE::SCRIPT_OUTPUT::FUNCTION_GET_BASE_ACTOR_VALUE) &&
-			!matches(RE::SCRIPT_OUTPUT::FUNCTION_GET_PERMANENT_ACTOR_VALUE)) {
+		if (!matches(static_cast<RE::SCRIPT_OUTPUT>(14)) &&
+			!matches(static_cast<RE::SCRIPT_OUTPUT>(277)) &&
+			!matches(static_cast<RE::SCRIPT_OUTPUT>(494))) {
 			return nullptr;
 		}
 		auto* form = static_cast<RE::TESForm*>(a_item->data.functionData.param[0]);

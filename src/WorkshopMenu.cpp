@@ -156,6 +156,17 @@ namespace
 	std::atomic_uint32_t g_workshopDisplayKey{ 0 };
 	std::atomic_bool g_workshopPresentationVerifyPending{ false };
 	std::atomic_bool g_workshopPreDisplayPending{ false };
+	std::array<RE::BSGFxShaderFXTarget*, kWorkshopRequirementSlots> GetWorkshopPanels(RE::WorkshopMenu::FXWorkshopMenu* a_base)
+	{
+		if (!a_base) {
+			return {};
+		}
+		const auto address = reinterpret_cast<std::uintptr_t>(a_base);
+		return {
+			*reinterpret_cast<RE::BSGFxShaderFXTarget**>(address + 0x1C8),
+			*reinterpret_cast<RE::BSGFxShaderFXTarget**>(address + 0x1D0)
+		};
+	}
 // Returns the TESForm represented by a display alternative.
 	RE::TESForm* GetDisplayForm(const PCF::PerkAlternative& a_alternative)
 	{
@@ -178,7 +189,7 @@ namespace
 	bool IsHostVisible(RE::IMenu* a_menu, bool& a_visible)
 	{
 		a_visible = true;
-		auto* workshop = RE::fallout_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase || !workshop->workshopMenuBase->requirementsBase) {
 			return false;
 		}
@@ -348,7 +359,7 @@ namespace
 	PanelOwners FindPanelOwners(RE::IMenu* a_menu)
 	{
 		PanelOwners ownership;
-		auto* workshop = RE::fallout_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase) {
 			return ownership;
 		}
@@ -359,9 +370,7 @@ namespace
 			return ownership;
 		}
 
-		const std::array<RE::BSGFxShaderFXTarget*, kWorkshopRequirementSlots> panels{
-			base->perkPanel1.get(), base->perkPanel2.get()
-		};
+		const auto panels = GetWorkshopPanels(base);
 		for (std::size_t i = 0; i < panels.size(); ++i) {
 			if (HasDisplayMember(baseValue, kWorkshopFallUIShadowOwners[i])) {
 				ownership.ownerFlags[i] |= kOwnerShadow;
@@ -502,14 +511,12 @@ namespace
 	// Sets all PCF-controlled visibility for one Workshop slot.
 	bool SetSlotVisibility(RE::IMenu* a_menu, std::size_t a_slot, bool a_visible)
 	{
-		auto* workshop = RE::fallout_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase || a_slot >= kWorkshopRequirementSlots) {
 			return false;
 		}
 		auto* base = workshop->workshopMenuBase.get();
-		const std::array<RE::BSGFxShaderFXTarget*, kWorkshopRequirementSlots> panels{
-			base->perkPanel1.get(), base->perkPanel2.get()
-		};
+		const auto panels = GetWorkshopPanels(base);
 		auto* panel = panels[a_slot];
 		if (!panel) {
 			return false;
@@ -539,14 +546,12 @@ namespace
 	// Releases all PCF control for one Workshop slot.
 	void ReleaseSlotOwnership(RE::IMenu* a_menu, std::size_t a_slot)
 	{
-		auto* workshop = RE::fallout_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase || a_slot >= kWorkshopRequirementSlots) {
 			return;
 		}
 		auto* base = workshop->workshopMenuBase.get();
-		const std::array<RE::BSGFxShaderFXTarget*, kWorkshopRequirementSlots> panels{
-			base->perkPanel1.get(), base->perkPanel2.get()
-		};
+		const auto panels = GetWorkshopPanels(base);
 		auto* panel = panels[a_slot];
 		if (!panel) {
 			return;
@@ -659,14 +664,14 @@ namespace
 	bool GetPresentationKey(RE::IMenu* a_menu, std::uint32_t& a_fingerprint)
 	{
 		a_fingerprint = kHashOffset;
-		auto* workshop = RE::fallout_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase) {
 			return false;
 		}
 		auto* base = workshop->workshopMenuBase.get();
 		bool hostVisible = true;
 		AddToHash(a_fingerprint, IsHostVisible(a_menu, hostVisible) ? (hostVisible ? 3u : 2u) : 1u);
-		const std::array panels{ base->perkPanel1.get(), base->perkPanel2.get() };
+		const auto panels = GetWorkshopPanels(base);
 		bool foundPanel = false;
 		for (std::size_t i = 0; i < panels.size(); ++i) {
 			AddToHash(a_fingerprint, static_cast<std::uint32_t>(i + 1));
@@ -834,7 +839,7 @@ namespace
 	// Finds the active Workshop recipe and selection.
 	WorkshopStatus FindWorkshopContext(RE::IMenu* a_menu, WorkshopSelection& a_selection)
 	{
-		auto* workshop = RE::fallout_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase) {
 			return WorkshopStatus::kMenuUnavailable;
 		}
@@ -1059,9 +1064,9 @@ namespace
 			return native();
 		}
 		auto* ui = RE::UI::GetSingleton();
-		const auto menu = ui ? ui->GetMenu<RE::WorkshopMenu>() : RE::Scaleform::Ptr<RE::WorkshopMenu>();
+		const auto menu = ui ? ui->GetMenu<RE::WorkshopMenu>() : Scaleform::Ptr<RE::WorkshopMenu>();
 		if (!menu || !menu->uiMovie || !menu->workshopMenuBase ||
-			reinterpret_cast<RE::Scaleform::GFx::Movie*>(a_interface->movieRoot) != menu->uiMovie.get()) {
+			reinterpret_cast<Scaleform::GFx::Movie*>(a_interface->movieRoot) != menu->uiMovie.get()) {
 			return native();
 		}
 		struct PerkDataGuard
@@ -1261,13 +1266,11 @@ namespace
 	// Clears Workshop slots that are no longer needed.
 	bool ClearUnusedSlots(RE::IMenu* a_menu, std::size_t a_firstUnused)
 	{
-		auto* workshop = RE::fallout_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase) {
 			return false;
 		}
-		const std::array<RE::BSGFxShaderFXTarget*, kWorkshopRequirementSlots> panels{
-			workshop->workshopMenuBase->perkPanel1.get(), workshop->workshopMenuBase->perkPanel2.get()
-		};
+		const auto panels = GetWorkshopPanels(workshop->workshopMenuBase.get());
 		bool changed = false;
 		for (std::size_t i = (std::min)(a_firstUnused, panels.size()); i < panels.size(); ++i) {
 			if (!panels[i]) {
@@ -1299,12 +1302,12 @@ namespace
 	// Shows the prepared requirements on the Workshop cards.
 	bool ShowWorkshopDisplay(RE::IMenu* a_menu, const WorkshopSelection& a_selection, std::size_t& a_panels, std::size_t& a_changed)
 	{
-		auto* workshop = RE::fallout_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase) {
 			return false;
 		}
 		auto* base = workshop->workshopMenuBase.get();
-		const std::array<RE::BSGFxShaderFXTarget*, 2> panels{ base->perkPanel1.get(), base->perkPanel2.get() };
+		const auto panels = GetWorkshopPanels(base);
 		for (std::size_t i = 0; i < panels.size(); ++i) {
 			if (panels[i]) {
 				++a_panels;
@@ -1413,7 +1416,7 @@ namespace
 			return;
 		}
 
-		auto* workshop = a_user ? RE::fallout_cast<RE::WorkshopMenu*>(a_user) : nullptr;
+		auto* workshop = a_user ? static_cast<RE::WorkshopMenu*>(a_user) : nullptr;
 		RE::IMenu* menu = workshop;
 		const bool active = menu && HasWorkshopChanges(menu);
 		if (active && a_event) {
@@ -1562,7 +1565,7 @@ namespace
 			return false;
 		}
 		REL::Relocation<std::uintptr_t> vtable{ a_vtable };
-		const auto previous = vtable.WriteVirtualCall(a_slot, a_replacement);
+		const auto previous = vtable.WriteVirtualCall(a_slot, replacement);
 		a_original = reinterpret_cast<Function>(previous);
 		return a_original != nullptr && PCF::NativeHooks::IsVtableSlotSet(a_vtable, a_slot, replacement);
 	}
@@ -1580,7 +1583,7 @@ namespace
 	// Finds the Workshop call that writes perkData.
 	std::uintptr_t FindPerkDataCall(std::uintptr_t a_owner, std::uintptr_t a_append, std::uintptr_t a_setMember)
 	{
-		const auto module = REL::Module::GetSingleton();
+		const auto& module = REL::Module::GetSingleton();
 		const auto text = module->GetSection(REL::MODULE_SECTION_NAME_TEXT);
 		const auto data = module->GetSection(REL::MODULE_SECTION_NAME_RDATA);
 		if (a_owner < text.GetAddress() || a_owner - text.GetAddress() >= text.GetSize()) {
@@ -1673,7 +1676,7 @@ namespace
 			}
 			const auto expectedSetMember = setMember;
 			g_workshopSetMember = reinterpret_cast<WorkshopSetMemberFunction>(expectedSetMember);
-			const auto previous = trampoline.WriteCall<5>(call, &WorkshopSetPerkData);
+			const auto previous = trampoline.WriteCall<5>(call, reinterpret_cast<std::uintptr_t>(&WorkshopSetPerkData));
 			if (previous) {
 				g_workshopSetMember = reinterpret_cast<WorkshopSetMemberFunction>(previous);
 			}
