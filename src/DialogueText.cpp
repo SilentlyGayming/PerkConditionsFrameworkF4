@@ -183,16 +183,17 @@ namespace
 	// Adds unique configured perks from one condition list.
 	void AddConditionPerks(RE::TESConditionItem* a_head, std::vector<std::uintptr_t>& a_sources)
 	{
-		for (auto* item = a_head; item; item = item->next) {
-			if (!PCF::PerkConditions::IsPositivePerkCheck(item)) {
-				continue;
-			}
-			auto* source = PCF::PerkConditions::GetConditionPerk(item);
-			const auto identity = reinterpret_cast<std::uintptr_t>(source);
-			if (source && std::find(a_sources.begin(), a_sources.end(), identity) == a_sources.end()) {
-				a_sources.push_back(identity);
-			}
-		}
+    		for (auto* item = a_head; item; item = item->next) {
+        		auto* source = PCF::PerkConditions::GetConditionPerk(item);
+        			if (!source) {
+            				continue;
+        			}
+
+        			const auto identity = reinterpret_cast<std::uintptr_t>(source);
+        			if (std::find(a_sources.begin(), a_sources.end(), identity) == a_sources.end()) {
+           			 a_sources.push_back(identity);
+        		}
+    		}
 	}
 
 	// Removes perks that do not have an active PCF rule.
@@ -236,13 +237,10 @@ namespace
 			return false;
 		}
 		for (auto* item = a_info->objConditions.head; item; item = item->next) {
-			if (!PCF::PerkConditions::IsPositivePerkCheck(item)) {
-				continue;
-			}
-			auto* source = PCF::PerkConditions::GetConditionPerk(item);
-			if (!source) {
-				continue;
-			}
+   			auto* source = PCF::PerkConditions::GetConditionPerk(item);
+    			if (!source) {
+        			continue;
+    		}
 			const auto matches = [&](RE::BGSPerk* a_perk) {
 				if (!a_perk) {
 					return false;
