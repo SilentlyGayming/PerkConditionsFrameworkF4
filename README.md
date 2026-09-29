@@ -19,7 +19,7 @@ Perk Conditions Framework is an F4SE and CommonLibF4 patcher that allows mod aut
 ## User Requirements
 
 - [F4SE](https://f4se.silverlock.org/)
-- [Runtime Database](https://www.nexusmods.com/fallout4/mods/108394)
+- [Address Library for F4SE Plugins](https://www.nexusmods.com/fallout4/mods/47327)
 
 ## Register Visual Studio as a Generator
 
