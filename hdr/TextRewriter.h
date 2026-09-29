@@ -233,21 +233,19 @@ namespace PCF::TextRewriter
 			while (cursor < a_text.size() && std::isspace(static_cast<unsigned char>(a_text[cursor]))) {
 				++cursor;
 			}
-			if (cursor >= a_text.size() || !SameText(a_text[cursor], 'r')) {
-				return false;
-			}
-
-			++cursor;
-			if (cursor + 3 <= a_text.size() && SameText(a_text[cursor], 'a') &&
-				SameText(a_text[cursor + 1], 'n') && SameText(a_text[cursor + 2], 'k')) {
-				cursor += 3;
-				if (cursor >= a_text.size() || !std::isspace(static_cast<unsigned char>(a_text[cursor]))) {
-					return false;
-				}
-			}
-
-			while (cursor < a_text.size() && std::isspace(static_cast<unsigned char>(a_text[cursor]))) {
+			if (cursor < a_text.size() && SameText(a_text[cursor], 'r')) {
 				++cursor;
+				if (cursor + 3 <= a_text.size() && SameText(a_text[cursor], 'a') &&
+					SameText(a_text[cursor + 1], 'n') && SameText(a_text[cursor + 2], 'k')) {
+					cursor += 3;
+					if (cursor >= a_text.size() || !std::isspace(static_cast<unsigned char>(a_text[cursor]))) {
+						return false;
+					}
+				}
+
+				while (cursor < a_text.size() && std::isspace(static_cast<unsigned char>(a_text[cursor]))) {
+					++cursor;
+				}
 			}
 			if (cursor >= a_text.size() || !std::isdigit(static_cast<unsigned char>(a_text[cursor]))) {
 				return false;
