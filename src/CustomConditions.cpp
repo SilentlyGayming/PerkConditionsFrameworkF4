@@ -4,7 +4,6 @@
 
 #include "PCH.h"
 #include "CustomConditions.h"
-#include "EngineIDs.h"
 #include "NativeHooks.h"
 #include "PerkConditions.h"
 #include "RuleRegistry.h"
@@ -27,6 +26,7 @@ namespace
 	using IsTrueContextFunction = bool (*)(const RE::TESCondition*, RE::ConditionCheckParams&);
 	using IsTrueForAllButFunction = bool (*)(const RE::TESCondition*, RE::ConditionCheckParams&, RE::SCRIPT_OUTPUT);
 	using WorkbenchChoiceRequirementsFunction = bool (*)(RE::WorkbenchMenuBase*, const RE::WorkbenchMenuBase::ModChoiceData*, bool);
+	using WorkbenchChoiceRequirementsFunctionOG = bool (*)(RE::WorkbenchMenuBase*, const RE::WorkbenchMenuBase::ModChoiceData*);
 
 	std::vector<std::unique_ptr<PCF::CustomConditions::ConditionSet>> g_sets;
 	std::unordered_map<const RE::TESForm*, PCF::CustomConditions::ConditionSet*> g_byTarget;
@@ -35,6 +35,7 @@ namespace
 	IsTrueContextFunction g_isTrueContextOriginal{ nullptr };
 	IsTrueForAllButFunction g_isTrueForAllButOriginal{ nullptr };
 	WorkbenchChoiceRequirementsFunction g_workbenchChoiceRequirementsOriginal{ nullptr };
+	WorkbenchChoiceRequirementsFunctionOG g_workbenchChoiceRequirementsOriginalOG{ nullptr };
 	bool g_installAttempted{ false };
 	bool g_installed{ false };
 	bool g_behaviorActive{ false };
@@ -87,8 +88,11 @@ namespace
 			// WorkshopCanShowRecipe excludes HasPerk so unmet requirements stay visible. A registered
 			// COBJ has no effective native CTDAs, so this visibility stage must pass; Workshop's later
 			// full TESCondition::IsTrue call enforces the complete PCF replacement set.
+			const auto hasPerk = static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::kScript_HasPerk);
 			if (set->owner == PCF::CustomConditions::OwnerKind::kCrafting &&
-				a_excludedFunction == RE::SCRIPT_OUTPUT::FUNCTION_HAS_PERK) {
+				(static_cast<std::uint32_t>(a_excludedFunction) == hasPerk ||
+					static_cast<std::uint32_t>(a_excludedFunction) == hasPerk +
+						static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::kScript_Offset))) {
 				return true;
 			}
 			return PCF::CustomConditions::Evaluate(*set);
@@ -108,16 +112,28 @@ namespace
 		return !set || PCF::CustomConditions::Evaluate(*set);
 	}
 
-	// Resolves one runtime-database hook target and proves a safe whole-instruction overwrite span.
-	bool AddHookPlan(std::vector<HookPlan>& a_plans, HookKind a_kind, const REL::ID& a_id,
+	// Adds the replacement set after an empty native Workbench recipe passes Bethesda's other checks.
+	bool WorkbenchChoiceRequirementsHookOG(RE::WorkbenchMenuBase* a_menu,
+		const RE::WorkbenchMenuBase::ModChoiceData* a_choice)
+	{
+		const bool nativeResult = g_workbenchChoiceRequirementsOriginalOG(a_menu, a_choice);
+		if (!nativeResult || !a_choice || !a_choice->recipe || a_choice->recipe->conditions.head) {
+			return nativeResult;
+		}
+		const auto* set = PCF::CustomConditions::Find(static_cast<const RE::TESForm*>(a_choice->recipe));
+		return !set || PCF::CustomConditions::Evaluate(*set);
+	}
+
+	// Resolves one Address Library hook target and proves a safe whole-instruction overwrite span.
+	bool AddHookPlan(std::vector<HookPlan>& a_plans, HookKind a_kind, const REL::IId& a_id,
 		std::uintptr_t a_hook, std::string_view a_name)
 	{
-		const auto resolved = REL::IDDatabase::get().resolve(a_id);
+		const auto resolved = a_id.GetAddress();
 		if (!resolved) {
 			spdlog::error("Custom conditions: {} relocation unavailable; feature disabled", a_name);
 			return false;
 		}
-		const auto source = REL::Module::get().base() + *resolved.rva;
+		const auto source = resolved;
 		const auto stolenLength = PCF::NativeHooks::FindSafeOverwriteLength(source);
 		if (stolenLength < PCF::NativeHooks::kRelativeJumpSize) {
 			spdlog::error("Custom conditions: {} entry cannot be copied safely; feature disabled", a_name);
@@ -150,7 +166,9 @@ namespace
 			if (!AddHookPlan(plans, HookKind::kAllButFunction, PCF::EngineIDs::TESConditionIsTrueForAllButFunction,
 				reinterpret_cast<std::uintptr_t>(&IsTrueForAllButFunctionHook), "TESCondition::IsTrueForAllButFunction") ||
 				!AddHookPlan(plans, HookKind::kWorkbench, PCF::EngineIDs::WorkbenchChoiceRequirements,
-					reinterpret_cast<std::uintptr_t>(&WorkbenchChoiceRequirementsHook), "Workbench requirement helper 2223051")) {
+					(REL::Module::GetSingleton()->GetVersion() == REX::Version(1, 10, 163, 0) ?
+					reinterpret_cast<std::uintptr_t>(&WorkbenchChoiceRequirementsHookOG) :
+					reinterpret_cast<std::uintptr_t>(&WorkbenchChoiceRequirementsHook)), "Workbench requirement helper 2223051")) {
 				return false;
 			}
 		}
@@ -159,8 +177,8 @@ namespace
 		for (const auto& plan : plans) {
 			poolBytes += plan.stolenLength + (PCF::NativeHooks::kAbsoluteJumpSize * 2);
 		}
-		const auto* trampoline = F4SE::GetTrampolineInterface();
-		auto* memory = trampoline ? static_cast<std::uint8_t*>(trampoline->AllocateFromBranchPool(poolBytes)) : nullptr;
+		const auto trampoline = F4SE::GetTrampolineInterface();
+		auto* memory = reinterpret_cast<std::uint8_t*>(trampoline->AllocateFromBranchPool(poolBytes));
 		if (!memory) {
 			spdlog::error("Custom conditions: branch-pool allocation failed; feature disabled");
 			return false;
@@ -196,7 +214,11 @@ namespace
 				g_isTrueForAllButOriginal = reinterpret_cast<IsTrueForAllButFunction>(plan.original);
 				break;
 			case HookKind::kWorkbench:
-				g_workbenchChoiceRequirementsOriginal = reinterpret_cast<WorkbenchChoiceRequirementsFunction>(plan.original);
+				if (REL::Module::GetSingleton()->GetVersion() == REX::Version(1, 10, 163, 0)) {
+					g_workbenchChoiceRequirementsOriginalOG = reinterpret_cast<WorkbenchChoiceRequirementsFunctionOG>(plan.original);
+				} else {
+					g_workbenchChoiceRequirementsOriginal = reinterpret_cast<WorkbenchChoiceRequirementsFunction>(plan.original);
+				}
 				break;
 			}
 		}
@@ -233,6 +255,7 @@ namespace PCF::CustomConditions
 		g_isTrueContextOriginal = nullptr;
 		g_isTrueForAllButOriginal = nullptr;
 		g_workbenchChoiceRequirementsOriginal = nullptr;
+		g_workbenchChoiceRequirementsOriginalOG = nullptr;
 	}
 
 	bool Add(RE::TESForm* a_target, std::vector<Condition> a_conditions)
@@ -405,19 +428,6 @@ namespace PCF::CustomConditions
 					}
 				}
 			}
-			const auto visibleConditionCount = static_cast<std::size_t>(std::count_if(
-				set.conditions.begin(), set.conditions.end(), [](const Condition& condition) { return IsPlayerFacing(condition); }));
-			if (set.owner == OwnerKind::kCrafting && visibleConditionCount > 2) {
-				const auto* files = set.target ? set.target->sourceFiles.array : nullptr;
-				const auto plugin = files && !files->empty() && (*files)[0] ? (*files)[0]->GetFilename() : std::string_view{ "unknown" };
-				if (visibleConditionCount > 4) {
-					spdlog::warn("Custom conditions: {} [{:08X}] has {} player-facing condition(s); crafting UI displays up to 4 and Workshop UI up to 2 when applicable; gameplay evaluates all {} condition(s)",
-						plugin, set.target ? set.target->GetFormID() : 0, visibleConditionCount, set.conditions.size());
-				} else {
-					spdlog::warn("Custom conditions: {} [{:08X}] has {} player-facing condition(s); Workshop UI displays up to 2 when applicable; gameplay evaluates all {} condition(s)",
-						plugin, set.target ? set.target->GetFormID() : 0, visibleConditionCount, set.conditions.size());
-				}
-			}
 		}
 	}
 
@@ -446,7 +456,7 @@ namespace PCF::CustomConditions
 		}
 		g_installed = true;
 		g_behaviorActive = true;
-		spdlog::info("Custom condition hooks active");
+		spdlog::debug("Custom condition hooks active");
 		return true;
 	}
 
@@ -615,7 +625,7 @@ namespace PCF::CustomConditions
 				native.data.value = 1.0F;
 				native.data.functionData.function = static_cast<RE::SCRIPT_OUTPUT>(59);
 				native.data.functionData.param[1] = reinterpret_cast<void*>(static_cast<std::uintptr_t>(a_condition.questStage));
-				native.data.condition = RE::ENUM_COMPARISON_CONDITION::kEqual;
+				native.data.condition = static_cast<std::uint8_t>(RE::ENUM_COMPARISON_CONDITION::kEqual);
 			} else {
 				// GetStage(Quest) is compared numerically by the native CTDA operator.
 				native.data.value = static_cast<float>(a_condition.questStage);
@@ -623,19 +633,19 @@ namespace PCF::CustomConditions
 				native.data.functionData.param[1] = nullptr;
 				switch (a_condition.value.comparison) {
 				case ComparisonOp::kEqual:
-					native.data.condition = RE::ENUM_COMPARISON_CONDITION::kEqual;
+					native.data.condition = static_cast<std::uint8_t>(RE::ENUM_COMPARISON_CONDITION::kEqual);
 					break;
 				case ComparisonOp::kGreater:
-					native.data.condition = RE::ENUM_COMPARISON_CONDITION::kGreaterThan;
+					native.data.condition = static_cast<std::uint8_t>(RE::ENUM_COMPARISON_CONDITION::kGreaterThan);
 					break;
 				case ComparisonOp::kGreaterEqual:
-					native.data.condition = RE::ENUM_COMPARISON_CONDITION::kGreaterThanEqual;
+					native.data.condition = static_cast<std::uint8_t>(RE::ENUM_COMPARISON_CONDITION::kGreaterThanEqual);
 					break;
 				case ComparisonOp::kLess:
-					native.data.condition = RE::ENUM_COMPARISON_CONDITION::kLessThan;
+					native.data.condition = static_cast<std::uint8_t>(RE::ENUM_COMPARISON_CONDITION::kLessThan);
 					break;
 				case ComparisonOp::kLessEqual:
-					native.data.condition = RE::ENUM_COMPARISON_CONDITION::kLessThanEqual;
+					native.data.condition = static_cast<std::uint8_t>(RE::ENUM_COMPARISON_CONDITION::kLessThanEqual);
 					break;
 				}
 			}

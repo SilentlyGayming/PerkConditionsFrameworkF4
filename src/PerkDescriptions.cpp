@@ -4,7 +4,6 @@
 
 #include "PCH.h"
 #include "PerkDescriptions.h"
-#include "EngineIDs.h"
 #include "NativeHooks.h"
 #include "PerkConditions.h"
 #include "RuleRegistry.h"
@@ -32,9 +31,9 @@
 
 namespace
 {
-	using DescriptionFunction = void (*)(RE::TESDescription*, RE::BSStringT<char>&, const RE::TESForm*);
+	using DescriptionFunction = void (*)(RE::TESDescription*, RE::BSString&, const RE::TESForm*);
 	using PipboyUpdateFunction = void (*)(RE::PipboyPerksMenu*);
-	using Value = RE::Scaleform::GFx::Value;
+	using Value = Scaleform::GFx::Value;
 
 	DescriptionFunction g_descriptionOriginal{ nullptr };
 	PipboyUpdateFunction g_pipboyUpdateOriginal{ nullptr };
@@ -47,10 +46,9 @@ namespace
 	constexpr std::size_t kTrampolineSize = 128;
 	constexpr std::size_t kPipboyUpdateSlot = 2;
 
-	inline constexpr std::uint32_t kPRKFImageTimestamp = 0x6A9D7778;
-	inline constexpr std::uint32_t kPRKFImageSize = 0x0007C000;
-	inline constexpr std::uintptr_t kPRKFDescriptionResolverRVA = 0x14D34;
-	inline constexpr std::uintptr_t kPRKFDescriptionFormArgRVA = 0x14D49;
+	using PRKFDescriptionFunction = RE::BSFixedString* (*)(RE::BSFixedString*, RE::TESForm*);
+	PRKFDescriptionFunction g_prkfDescriptionOriginal{ nullptr };
+	thread_local RE::BGSPerk* g_prkfDescriptionContext{ nullptr };
 	bool g_prkfDescriptionBridgeAttempted{ false };
 	bool g_prkfDescriptionBridgeInstalled{ false };
 	std::unordered_set<std::uint32_t> g_prkfDescriptionLogged;
@@ -63,10 +61,10 @@ namespace
 		std::uint16_t capacity{ 0 };
 	};
 
-	static_assert(sizeof(BSStringStorage) == sizeof(RE::BSStringT<char>));
+	static_assert(sizeof(BSStringStorage) == sizeof(RE::BSString));
 
 	// Replaces a game string while keeping Bethesda memory ownership intact.
-	bool SetDescription(RE::BSStringT<char>& a_output, std::string_view a_description)
+	bool SetDescription(RE::BSString& a_output, std::string_view a_description)
 	{
 		if (a_description.size() >= (std::numeric_limits<std::uint16_t>::max)()) {
 			return false;
@@ -83,7 +81,7 @@ namespace
 		storage.data = replacement;
 		storage.size = static_cast<std::uint16_t>(a_description.size());
 		storage.capacity = static_cast<std::uint16_t>(a_description.size() + 1);
-		std::memcpy(std::addressof(a_output), std::addressof(storage), sizeof(storage));
+		std::memcpy(static_cast<void*>(std::addressof(a_output)), std::addressof(storage), sizeof(storage));
 		return true;
 	}
 
@@ -179,7 +177,7 @@ namespace
 			}
 			return a_array.SetMember(key.data(), Value(a_description.c_str()));
 		}
-		if (entry.IsObject()) {
+		if (entry.IsAnyObject()) {
 			Value text;
 			if (entry.GetMember("text", std::addressof(text)) && text.IsString()) {
 				const char* existing = text.GetString();
@@ -207,7 +205,7 @@ namespace
 			a_text = text;
 			return true;
 		}
-		return entry.IsObject() && PCF::UICommon::ReadText(entry, "text", a_text);
+		return entry.IsAnyObject() && PCF::UICommon::ReadText(entry, "text", a_text);
 	}
 
 	// Gets the original description used to match the exact perk rank in the Pip-Boy.
@@ -216,7 +214,7 @@ namespace
 		if (!g_descriptionOriginal || !a_perk) {
 			return {};
 		}
-		RE::BSStringT<char> native;
+		RE::BSString native;
 		g_descriptionOriginal(static_cast<RE::TESDescription*>(a_perk), native, a_perk);
 		return native.c_str() ? std::string(native.c_str(), native.size()) : std::string{};
 	}
@@ -224,7 +222,7 @@ namespace
 	// Checks whether a Pip-Boy row belongs to the configured perk family.
 	bool RowMatchesPerk(const Value& a_row, RE::BGSPerk* a_perk)
 	{
-		if (!a_perk || !a_row.IsObject()) {
+		if (!a_perk || !a_row.IsAnyObject()) {
 			return false;
 		}
 		const char* nativeSWF = a_perk->swfFile.c_str();
@@ -274,7 +272,7 @@ namespace
 	{
 		Value descriptions;
 		std::uint32_t count = 0;
-		if (!a_row.IsObject() || !a_row.GetMember("descriptions", std::addressof(descriptions)) || !GetArrayLength(descriptions, count) || count == 0) {
+		if (!a_row.IsAnyObject() || !a_row.GetMember("descriptions", std::addressof(descriptions)) || !GetArrayLength(descriptions, count) || count == 0) {
 			return false;
 		}
 		const auto rank = PCF::RuleRegistry::GetRank(a_source);
@@ -293,7 +291,7 @@ namespace
 	// Applies active custom descriptions after the game builds the Pip-Boy perk list.
 	void UpdatePipboyDescriptions(RE::PipboyPerksMenu* a_menu)
 	{
-		if (!a_menu || !a_menu->dataObj.IsObject()) {
+		if (!a_menu || !a_menu->dataObj.IsAnyObject()) {
 			return;
 		}
 		Value perks;
@@ -346,7 +344,7 @@ namespace
 	}
 
 	// Applies a configured replacement after native description resolution.
-	bool ApplyConfiguredDescription(RE::TESDescription* a_description, RE::BSStringT<char>& a_output, RE::BGSPerk* a_prkfContext)
+	bool ApplyConfiguredDescription(RE::TESDescription* a_description, RE::BSString& a_output, RE::BGSPerk* a_prkfContext)
 	{
 		if (!g_descriptionBehaviorActive) {
 			return false;
@@ -365,24 +363,24 @@ namespace
 		}
 
 		if (a_prkfContext && perk == a_prkfContext && g_prkfDescriptionLogged.insert(perk->GetFormID()).second) {
-			spdlog::info("Descriptions: PRKF source={:08X} custom description applied", perk->GetFormID());
+			spdlog::debug("Descriptions: PRKF source={:08X} custom description applied", perk->GetFormID());
 		}
 		return true;
 	}
 
 	// Replaces configured text through the shared native TESDescription path.
-	void DescriptionHook(RE::TESDescription* a_description, RE::BSStringT<char>& a_output, const RE::TESForm* a_form)
+	void DescriptionHook(RE::TESDescription* a_description, RE::BSString& a_output, const RE::TESForm* a_form)
 	{
 		if (!g_descriptionOriginal) {
 			return;
 		}
 
 		g_descriptionOriginal(a_description, a_output, a_form);
-		ApplyConfiguredDescription(a_description, a_output, nullptr);
+		ApplyConfiguredDescription(a_description, a_output, g_prkfDescriptionContext);
 	}
 
 	// Handles PRKF's main LevelUpMenu description call using the source perk PRKF already keeps in RDI.
-	void PRKFDescriptionHook(RE::TESDescription* a_description, RE::BSStringT<char>& a_output, const RE::TESForm* a_form)
+	void PRKFDescriptionHook(RE::TESDescription* a_description, RE::BSString& a_output, const RE::TESForm* a_form)
 	{
 		if (!g_descriptionOriginal) {
 			return;
@@ -420,13 +418,73 @@ namespace
 				break;
 			}
 			}
-			spdlog::warn(
+			spdlog::debug(
 				"Descriptions: PRKF source={:08X} configured rule inactive (type={}, current={}, required={})",
 				context->GetFormID(), type, currentValue, rule.requiredValue);
 		}
 	}
 
-	// Routes PRKF's main LevelUpMenu description call through PCF and preserves the source perk as TESDescription context.
+	// Applies OG descriptions to PRKF's returned string while preserving its source form.
+	RE::BSFixedString* PRKFDescriptionHelperHook(RE::BSFixedString* a_result, RE::TESForm* a_form)
+	{
+		struct ContextScope
+		{
+			RE::BGSPerk* previous;
+			~ContextScope() { g_prkfDescriptionContext = previous; }
+		};
+		const ContextScope scope{ std::exchange(g_prkfDescriptionContext, a_form ? a_form->As<RE::BGSPerk>() : nullptr) };
+		auto* result = g_prkfDescriptionOriginal(a_result, a_form);
+		if (!g_descriptionBehaviorActive || !result || !a_form) {
+			return result;
+		}
+		const std::string* replacement = nullptr;
+		if (auto* actorValue = a_form->As<RE::ActorValueInfo>()) {
+			replacement = PCF::RuleRegistry::FindActorValueDescription(static_cast<RE::TESDescription*>(actorValue));
+		} else {
+			replacement = FindActiveDescription(g_prkfDescriptionContext);
+		}
+		if (replacement) {
+			*result = replacement->c_str();
+			if (g_prkfDescriptionLogged.insert(a_form->GetFormID()).second) {
+				spdlog::debug("Descriptions: PRKF source={:08X} custom description applied", a_form->GetFormID());
+			}
+		}
+		return result;
+	}
+
+	// Installs OG's shared helper while preserving its returned string and allocator.
+	bool InstallPRKFDescriptionHelper(std::uintptr_t a_base, const PCF::PRKFCompatibility::Build& a_build)
+	{
+		const auto source = a_base + a_build.descriptionRVA;
+		const auto& prologue = a_build.descriptionHelperPrologue;
+		if (std::memcmp(reinterpret_cast<const void*>(source), prologue.data(), prologue.size()) != 0 ||
+			PCF::NativeHooks::FindSafeOverwriteLength(source, prologue.size()) != prologue.size()) {
+			spdlog::warn("Descriptions: PRKF shared description helper verification failed; original code left untouched");
+			return false;
+		}
+		const auto required = prologue.size() + PCF::NativeHooks::kAbsoluteJumpSize;
+		auto* original = static_cast<std::uint8_t*>(::VirtualAlloc(
+			nullptr, required, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+		if (!original) {
+			return false;
+		}
+		std::memcpy(original, reinterpret_cast<const void*>(source), prologue.size());
+		PCF::NativeHooks::WriteAbsoluteJump(original + prologue.size(), source + prologue.size());
+		::FlushInstructionCache(::GetCurrentProcess(), original, required);
+		std::array<std::uint8_t, 15> patch{};
+		patch.fill(REL::NOP);
+		PCF::NativeHooks::WriteAbsoluteJump(patch.data(), reinterpret_cast<std::uintptr_t>(&PRKFDescriptionHelperHook));
+		g_prkfDescriptionOriginal = reinterpret_cast<PRKFDescriptionFunction>(original);
+		if (!PCF::NativeHooks::WriteVerified(source, patch)) {
+			PCF::NativeHooks::WriteVerified(source, prologue);
+			g_prkfDescriptionOriginal = nullptr;
+			::VirtualFree(original, 0, MEM_RELEASE);
+			return false;
+		}
+		return true;
+	}
+
+	// Routes each verified PRKF build through PCF with its source perk context.
 	bool InstallPRKFDescriptionBridge()
 	{
 		if (g_prkfDescriptionBridgeInstalled) {
@@ -446,21 +504,29 @@ namespace
 		const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
 		const auto* nt = dos->e_magic == IMAGE_DOS_SIGNATURE ?
 			reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew) : nullptr;
-		if (!nt || nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.TimeDateStamp != kPRKFImageTimestamp ||
-			nt->OptionalHeader.SizeOfImage != kPRKFImageSize) {
+		const auto* build = nt && nt->Signature == IMAGE_NT_SIGNATURE &&
+			nt->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 && nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC ?
+			PCF::PRKFCompatibility::FindBuild(nt->FileHeader.TimeDateStamp, nt->OptionalHeader.SizeOfImage) : nullptr;
+		if (!build || F4SE::GetRuntimeVersion() != REX::Version(
+			build->runtime[0], build->runtime[1], build->runtime[2], build->runtime[3])) {
 			spdlog::warn("Descriptions: unsupported PRKF.dll build; LevelUpMenu descriptions will use PRKF's original text");
 			return false;
 		}
 
-		const auto resolverAddress = base + kPRKFDescriptionResolverRVA;
-		const auto formArgAddress = base + kPRKFDescriptionFormArgRVA;
+		if (!build->descriptionFormArgRVA) {
+			g_prkfDescriptionBridgeInstalled = InstallPRKFDescriptionHelper(base, *build);
+			if (g_prkfDescriptionBridgeInstalled) {
+				spdlog::debug("Descriptions: PRKF {} LevelUpMenu description bridge active", build->name);
+			}
+			return g_prkfDescriptionBridgeInstalled;
+		}
+
+		const auto resolverAddress = base + build->descriptionRVA;
+		const auto formArgAddress = base + build->descriptionFormArgRVA;
 		const auto* resolverBytes = reinterpret_cast<const std::uint8_t*>(resolverAddress);
 		const auto* formArgBytes = reinterpret_cast<const std::uint8_t*>(formArgAddress);
-		constexpr std::array<std::uint8_t, 14> expectedResolver{
-			0x4C, 0x8B, 0x0D, 0x35, 0xC8, 0x05, 0x00,
-			0x49, 0x81, 0xC1, 0x10, 0xEA, 0x30, 0x00
-		};
-		constexpr std::array<std::uint8_t, 3> expectedFormArg{ 0x45, 0x33, 0xC0 };  // xor r8d,r8d
+		const auto& expectedResolver = build->descriptionResolver;
+		constexpr std::array<std::uint8_t, 3> expectedFormArg{ 0x45, 0x33, 0xC0 };
 		if (std::memcmp(resolverBytes, expectedResolver.data(), expectedResolver.size()) != 0 ||
 			std::memcmp(formArgBytes, expectedFormArg.data(), expectedFormArg.size()) != 0) {
 			spdlog::warn("Descriptions: PRKF PopulatePerkEntry description site verification failed; original code left untouched");
@@ -475,23 +541,25 @@ namespace
 		std::array<std::uint8_t, 14> resolverPatch{};
 		resolverPatch.fill(0x90);
 		resolverPatch[0] = 0x49;
-		resolverPatch[1] = 0xB9;  // mov r9, imm64
+		resolverPatch[1] = 0xB9;
 		const auto hookAddress = reinterpret_cast<std::uintptr_t>(&PRKFDescriptionHook);
 		std::memcpy(resolverPatch.data() + 2, std::addressof(hookAddress), sizeof(hookAddress));
-		constexpr std::array<std::uint8_t, 3> formArgPatch{ 0x4C, 0x8B, 0xC7 };  // mov r8,rdi
+		constexpr std::array<std::uint8_t, 3> formArgPatch{ 0x4C, 0x8B, 0xC7 };
 
 		if (!PCF::NativeHooks::WriteVerified(resolverAddress, resolverPatch)) {
+			PCF::NativeHooks::WriteVerified(resolverAddress, resolverBackup);
 			spdlog::warn("Descriptions: PRKF description target redirect failed; original code left untouched");
 			return false;
 		}
 		if (!PCF::NativeHooks::WriteVerified(formArgAddress, formArgPatch)) {
+			PCF::NativeHooks::WriteVerified(formArgAddress, formArgBackup);
 			PCF::NativeHooks::WriteVerified(resolverAddress, resolverBackup);
 			spdlog::warn("Descriptions: PRKF source-perk argument patch failed; description target redirect restored");
 			return false;
 		}
 
 		g_prkfDescriptionBridgeInstalled = true;
-		spdlog::info("Descriptions: PRKF LevelUpMenu description bridge active (direct source perk context)");
+		spdlog::debug("Descriptions: PRKF {} LevelUpMenu description bridge active (direct source perk context)", build->name);
 		return true;
 	}
 
@@ -515,29 +583,29 @@ namespace
 		}
 		g_descriptionHookAttempted = true;
 		try {
-			const auto resolved = REL::IDDatabase::get().resolve(PCF::EngineIDs::TESDescriptionGetDescription);
+			const auto resolved = PCF::EngineIDs::TESDescriptionGetDescription.GetAddress();
 			if (!resolved) {
 				spdlog::error("Descriptions: TESDescription::GetDescription relocation unavailable");
 				return false;
 			}
-			const auto source = REL::Module::get().base() + *resolved.rva;
+			const auto source = resolved;
 			const auto prologueLength = PCF::NativeHooks::FindSafeOverwriteLength(source);
 			if (prologueLength < PCF::NativeHooks::kRelativeJumpSize) {
 				spdlog::error("Descriptions: TESDescription::GetDescription prologue is not safe to patch");
 				return false;
 			}
 
-			auto& trampoline = F4SE::GetTrampoline();
-			if (trampoline.empty()) {
-				const auto* trampolineInterface = F4SE::GetTrampolineInterface();
-				void* memory = trampolineInterface ? trampolineInterface->AllocateFromBranchPool(kTrampolineSize) : nullptr;
+			auto& trampoline = **REL::GetTrampoline();
+			if (trampoline.IsEmpty()) {
+				const auto trampolineInterface = F4SE::GetTrampolineInterface();
+				void* memory = trampolineInterface->AllocateFromBranchPool(kTrampolineSize);
 				if (!memory) {
 					spdlog::error("Descriptions: trampoline allocation failed");
 					return false;
 				}
-				trampoline.set_trampoline(memory, kTrampolineSize);
+				trampoline.Init(static_cast<std::byte*>(memory), kTrampolineSize);
 			}
-			if (trampoline.free_size() < prologueLength + (PCF::NativeHooks::kAbsoluteJumpSize * 2)) {
+			if (trampoline.GetFreeSize() < prologueLength + (PCF::NativeHooks::kAbsoluteJumpSize * 2)) {
 				spdlog::error("Descriptions: trampoline does not have enough free space");
 				return false;
 			}
@@ -545,12 +613,12 @@ namespace
 			std::vector<std::uint8_t> originalBytes(prologueLength);
 			std::memcpy(originalBytes.data(), reinterpret_cast<const void*>(source), prologueLength);
 
-			auto* original = static_cast<std::uint8_t*>(trampoline.allocate(prologueLength + PCF::NativeHooks::kAbsoluteJumpSize));
+			auto* original = reinterpret_cast<std::uint8_t*>(trampoline.Allocate(prologueLength + PCF::NativeHooks::kAbsoluteJumpSize));
 			std::memcpy(original, originalBytes.data(), prologueLength);
 			PCF::NativeHooks::WriteAbsoluteJump(original + prologueLength, source + prologueLength);
 			g_descriptionOriginal = reinterpret_cast<DescriptionFunction>(original);
 
-			auto* relay = static_cast<std::uint8_t*>(trampoline.allocate(PCF::NativeHooks::kAbsoluteJumpSize));
+			auto* relay = reinterpret_cast<std::uint8_t*>(trampoline.Allocate(PCF::NativeHooks::kAbsoluteJumpSize));
 			PCF::NativeHooks::WriteAbsoluteJump(relay, reinterpret_cast<std::uintptr_t>(&DescriptionHook));
 			std::vector<std::uint8_t> patch;
 			if (!PCF::NativeHooks::MakeRelativeJumpPatch(source, reinterpret_cast<std::uintptr_t>(relay), prologueLength, patch)) {
@@ -604,7 +672,7 @@ namespace
 			}
 
 			REL::Relocation<std::uintptr_t> vtable{ g_pipboyVtableAddress };
-			vtable.write_vfunc(kPipboyUpdateSlot, g_pipboyUpdateOriginal);
+			vtable.WriteVirtualCall(kPipboyUpdateSlot, reinterpret_cast<std::uintptr_t>(g_pipboyUpdateOriginal));
 			if (table[kPipboyUpdateSlot] != original) {
 				return false;
 			}
@@ -625,15 +693,14 @@ namespace
 		}
 		g_pipboyHookAttempted = true;
 		try {
-			const auto updateLookup = REL::IDDatabase::get().resolve(PCF::EngineIDs::PipboyPerksMenuUpdateData);
-			const auto vtableLookup = REL::IDDatabase::get().resolve(RE::VTABLE::PipboyPerksMenu[0]);
+			const auto updateLookup = PCF::EngineIDs::PipboyPerksMenuUpdateData.GetAddress();
+			const auto vtableLookup = RE::VTABLE::PipboyPerksMenu[0].GetAddress();
 			if (!updateLookup || !vtableLookup) {
 				spdlog::error("Descriptions: Pip-Boy update relocation or vtable unavailable");
 				return false;
 			}
-			const auto base = REL::Module::get().base();
-			const auto vtableAddress = base + *vtableLookup.rva;
-			const auto expectedUpdate = base + *updateLookup.rva;
+			const auto vtableAddress = vtableLookup;
+			const auto expectedUpdate = updateLookup;
 			const auto* table = reinterpret_cast<const std::uintptr_t*>(vtableAddress);
 			if (table[kPipboyUpdateSlot] != expectedUpdate) {
 				spdlog::error("Descriptions: Pip-Boy update vtable slot does not match the proven runtime contract");
@@ -643,7 +710,7 @@ namespace
 			g_pipboyVtableAddress = vtableAddress;
 			g_pipboyUpdateOriginal = reinterpret_cast<PipboyUpdateFunction>(expectedUpdate);
 			REL::Relocation<std::uintptr_t> vtable{ vtableAddress };
-			const auto previous = vtable.write_vfunc(kPipboyUpdateSlot, &PipboyHook);
+			const auto previous = vtable.WriteVirtualCall(kPipboyUpdateSlot, PipboyHook);
 			if (previous != expectedUpdate) {
 				if (previous) {
 					g_pipboyUpdateOriginal = reinterpret_cast<PipboyUpdateFunction>(previous);

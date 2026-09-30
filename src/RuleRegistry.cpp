@@ -64,9 +64,11 @@ namespace
 	};
 
 	std::vector<PendingCustomCondition> g_pendingCustomConditions;
-	bool g_customConditionsConfigured{ false };
 	bool g_customConditionsFinalized{ true };
-	bool g_customConditionSummaryLogged{ false };
+	bool g_registrySummaryLogged{ false };
+	std::string g_loadedSummary;
+	std::string g_registrySummary;
+	std::size_t g_configuredCustomConditionCount{ 0 };
 
 	struct LookupInfo
 	{
@@ -120,7 +122,7 @@ namespace
 		}
 		const auto* files = a_form->sourceFiles.array;
 		return files && !files->empty() && (*files)[0] &&
-			_stricmp((*files)[0]->GetFilename().data(), a_plugin.c_str()) == 0;
+			_stricmp((*files)[0]->filename.data(), a_plugin.c_str()) == 0;
 	}
 	// Builds a lookup table for configured EditorIDs by plugin.
 	void BuildEditorIDIndex(RE::TESDataHandler* a_data, FormCache& a_cache, Diagnostics& a_diagnostics)
@@ -135,12 +137,12 @@ namespace
 			if (!files || files->empty() || !(*files)[0] || !editorID || !editorID[0]) {
 				return;
 			}
-			const auto key = MakeReferenceKey((*files)[0]->GetFilename(), editorID);
+			const auto key = MakeReferenceKey((*files)[0]->filename.data(), editorID);
 			auto [entry, inserted] = a_cache.try_emplace(key, a_form);
 			if (!inserted && entry->second != a_form) {
 				entry->second = nullptr;
 				a_diagnostics.push_back(fmt::format("Ambiguous EditorID {} in originating plugin {}; use a FormID",
-					editorID, (*files)[0]->GetFilename()));
+					editorID, (*files)[0]->filename.data()));
 			}
 		};
 
@@ -179,18 +181,18 @@ namespace
 			if (!a_data) {
 				return nullptr;
 			}
-			const auto* file = a_data->LookupModByName(a_plugin);
+			const auto* file = a_data->FindFileByName(a_plugin);
 			if (!file) {
 				warn("Missing plugin for", a_plugin, a_reference);
 				a_cache.emplace(key, nullptr);
 				return nullptr;
 			}
-			if ((formID >> 24) != 0 && !file->IsFormInMod(formID)) {
+			if ((formID >> 24) != 0 && !(file->IsLight() ? (formID >> 12) == (0xFE000u | file->smallFileCompileIndex) : (formID >> 24) == file->compileIndex)) {
 				warn("Full FormID does not belong to named plugin for", a_plugin, a_reference);
 				a_cache.emplace(key, nullptr);
 				return nullptr;
 			}
-			auto* form = a_data->LookupForm(GetLocalFormID(file, formID), a_plugin);
+			auto* form = a_data->FindForm(GetLocalFormID(file, formID), a_plugin);
 			if (!SamePlugin(form, a_plugin)) {
 				form = nullptr;
 			}
@@ -216,17 +218,19 @@ namespace
 		return FindReference(a_data, a_plugin, a_reference, a_cache, a_attemptDiagnostics, std::addressof(a_context));
 	}
 
-	// Emits the final custom-condition summary only after all deferred INFO targets have been resolved.
-	void LogCustomConditionSummary()
+	// Emits both registry summaries after deferred INFO targets have been resolved.
+	void LogRegistrySummary()
 	{
-		if (g_customConditionSummaryLogged || !g_customConditionsConfigured) {
+		if (g_registrySummaryLogged || !g_customConditionsFinalized || g_loadedSummary.empty()) {
 			return;
 		}
-		g_customConditionSummaryLogged = true;
-		spdlog::info("Custom conditions: {} target(s), {} condition(s), {} crafting, {} dialogue, {} quest-stage",
-			PCF::CustomConditions::TargetCount(), PCF::CustomConditions::ConditionCount(),
+		g_registrySummaryLogged = true;
+		const auto conditionCount = PCF::CustomConditions::ConditionCount();
+		spdlog::info("{}, {} custom condition(s)", g_loadedSummary, conditionCount);
+		spdlog::info("{}; {} custom condition(s) across {} target(s), {} crafting target(s), {} dialogue target(s), {} quest-stage condition(s), {} rejected custom condition row(s)",
+			g_registrySummary, conditionCount, PCF::CustomConditions::TargetCount(),
 			PCF::CustomConditions::CraftingTargetCount(), PCF::CustomConditions::DialogueTargetCount(),
-			PCF::CustomConditions::QuestConditionCount());
+			PCF::CustomConditions::QuestConditionCount(), g_configuredCustomConditionCount - conditionCount);
 	}
 
 	// Finds a configured form and checks that it has the expected type.
@@ -625,13 +629,15 @@ namespace PCF::RuleRegistry
 		g_actorValueDescriptions.clear();
 		g_requirementLabels.clear();
 		g_pendingCustomConditions.clear();
-		g_customConditionsConfigured = false;
 		g_customConditionsFinalized = true;
-		g_customConditionSummaryLogged = false;
+		g_registrySummaryLogged = false;
+		g_loadedSummary.clear();
+		g_registrySummary.clear();
+		g_configuredCustomConditionCount = 0;
 		PCF::CustomConditions::Clear();
 
 		const auto config = Config::Load();
-		g_customConditionsConfigured = !config.customConditions.empty();
+		g_configuredCustomConditionCount = config.customConditions.size();
 		Diagnostics diagnostics;
 		diagnostics.reserve(config.rules.size() + config.customConditions.size() + config.descriptionRules.size() + config.actorValueDescriptions.size() + config.requirementLabels.size() + config.nameAssignments.size() + config.swfAssignments.size());
 		auto* data = RE::TESDataHandler::GetSingleton();
@@ -707,7 +713,7 @@ namespace PCF::RuleRegistry
 						raw.file.filename().string(), raw.line, a_kind, a_plugin, a_reference));
 					return nullptr;
 				}
-				if (const auto* file = data->LookupModByName(a_plugin); file && file->IsLight() && localFormID > 0x00000FFF) {
+				if (const auto* file = data->FindFileByName(a_plugin); file && file->IsLight() && localFormID > 0x00000FFF) {
 					diagnostics.push_back(fmt::format("{}:{} - RequirementLabels {} FormID exceeds the local range of light plugin {}: {}",
 						raw.file.filename().string(), raw.line, a_kind, a_plugin, a_reference));
 					return nullptr;
@@ -748,7 +754,7 @@ namespace PCF::RuleRegistry
 					raw.file.filename().string(), raw.line, raw.plugin, raw.formReference));
 				continue;
 			}
-			if (const auto* file = data->LookupModByName(raw.plugin); file && file->IsLight() && localFormID > 0x00000FFF) {
+			if (const auto* file = data->FindFileByName(raw.plugin); file && file->IsLight() && localFormID > 0x00000FFF) {
 				diagnostics.push_back(fmt::format("{}:{} - Actor Value description FormID exceeds the local range of light plugin {}: {}",
 					raw.file.filename().string(), raw.line, raw.plugin, raw.formReference));
 				continue;
@@ -875,14 +881,14 @@ namespace PCF::RuleRegistry
 			}
 
 			std::uint32_t configuredFormID = target ? target->GetFormID() : 0;
-			const auto* file = data ? data->LookupModByName(raw.targetPlugin) : nullptr;
+			const auto* file = data ? data->FindFileByName(raw.targetPlugin) : nullptr;
 			if (!configuredFormID && !ReadFormID(raw.targetReference, configuredFormID)) {
 				diagnostics.insert(diagnostics.end(), targetAttemptDiagnostics.begin(), targetAttemptDiagnostics.end());
 				diagnostics.push_back(fmt::format("{}:{} - Rejected entire [Conditions] target because it could not be resolved: {} | {}",
 					raw.file.filename().string(), raw.line, raw.targetPlugin, raw.targetReference));
 				continue;
 			}
-			if (file && ((configuredFormID >> 24) == 0 || file->IsFormInMod(configuredFormID))) {
+			if (file && ((configuredFormID >> 24) == 0 || (file->IsLight() ? (configuredFormID >> 12) == (0xFE000u | file->smallFileCompileIndex) : (configuredFormID >> 24) == file->compileIndex))) {
 				configuredFormID = GetLocalFormID(file, configuredFormID);
 			}
 
@@ -934,7 +940,7 @@ namespace PCF::RuleRegistry
 				resolved.questStage = static_cast<std::uint16_t>(raw.requiredValue);
 				resolved.value.comparison = raw.comparison;
 				resolved.value.requiredValue = raw.requiredValue;
-				resolved.value.name = RE::TESFullName::GetFullName(*form, false);
+				resolved.value.name = RE::TESFullName::GetFormFullName(form).value_or(RE::BGSLocalizedString{}).c_str();
 				if (resolved.value.name.empty()) {
 					resolved.value.name = fmt::format("{}|{}", raw.conditionPlugin, raw.conditionReference);
 				}
@@ -983,7 +989,7 @@ namespace PCF::RuleRegistry
 				const char* editorID = condition.globalValue->formEditorID.c_str();
 				condition.name = editorID && editorID[0] ? editorID : fmt::format("{}|{}", raw.conditionPlugin, raw.conditionReference);
 			} else {
-				condition.name = RE::TESFullName::GetFullName(*form, false);
+				condition.name = RE::TESFullName::GetFormFullName(form).value_or(RE::BGSLocalizedString{}).c_str();
 				if (condition.name.empty()) {
 					condition.name = raw.conditionReference;
 				}
@@ -1128,7 +1134,7 @@ namespace PCF::RuleRegistry
 				alternative.name = editorID && editorID[0] ? editorID :
 					fmt::format("{}|{}", raw.alternativePlugin, raw.alternativeReference);
 			} else {
-				alternative.name = RE::TESFullName::GetFullName(*form, false);
+				alternative.name = RE::TESFullName::GetFormFullName(form).value_or(RE::BGSLocalizedString{}).c_str();
 				if (alternative.name.empty()) {
 					alternative.name = raw.alternativeReference;
 				}
@@ -1210,24 +1216,23 @@ namespace PCF::RuleRegistry
 			spdlog::warn("Registry: {} diagnostic issue(s):{}", diagnostics.size(), detail);
 		}
 
-		spdlog::info("Loaded {} of {} configuration file(s), {} [Perk=Perk] Rule(s), {} [Perk=ActorValue] Rule(s), {} [Perk=GlobalValue] Rule(s), {} description rule(s), {} Actor Value description assignment(s), {} requirement label(s) across {} target(s), {} name assignment(s), {} SWF assignment(s)",
+		g_loadedSummary = fmt::format("Loaded {} of {} configuration file(s), {} [Perk=Perk] Rule(s), {} [Perk=ActorValue] Rule(s), {} [Perk=GlobalValue] Rule(s), {} description rule(s), {} Actor Value description assignment(s), {} requirement label(s) across {} target(s), {} name assignment(s), {} SWF assignment(s)",
 			config.loadedFileCount, config.matchingFileCount, perkToPerkCount, perkToActorValueCount, perkToGlobalValueCount, descriptionsLoaded, actorValueDescriptionsLoaded, requirementLabelsLoaded, g_requirementLabels.size(), g_displayNames.size(), g_swfPaths.size());
-		if (g_customConditionsFinalized) {
-			LogCustomConditionSummary();
-		}
-		spdlog::info("Registry: {} source perk(s), {} resolved alternative(s), {} duplicate row(s), {} rejected row(s); {} description source perk(s), {} duplicate description row(s); {} Actor Value description(s), {} duplicate Actor Value description row(s), {} rejected Actor Value description row(s); {} requirement label(s) across {} target(s), {} duplicate requirement label row(s), {} rejected requirement label row(s)",
+		g_registrySummary = fmt::format("Registry: {} source perk(s), {} resolved alternative(s), {} duplicate row(s), {} rejected row(s); {} description source perk(s), {} duplicate description row(s), {} rejected description row(s); {} Actor Value description(s), {} duplicate Actor Value description row(s), {} rejected Actor Value description row(s); {} requirement label(s) across {} target(s), {} duplicate requirement label row(s), {} rejected requirement label row(s)",
 			g_rules.size(), resolved, duplicates, config.rules.size() - resolved - duplicates, g_descriptionRules.size(), descriptionDuplicates,
+			config.descriptionRules.size() - descriptionsLoaded - descriptionDuplicates,
 			g_actorValueDescriptions.size(), actorValueDescriptionDuplicates,
 			config.actorValueDescriptions.size() - actorValueDescriptionsLoaded - actorValueDescriptionDuplicates,
 			requirementLabelsLoaded, g_requirementLabels.size(), requirementLabelDuplicates,
 			config.requirementLabels.size() - requirementLabelsLoaded - requirementLabelDuplicates);
+		LogRegistrySummary();
 	}
 
 	// Finalizes deferred INFO [Conditions] targets against the authoritative dialogue-ready INFO snapshot.
 	void FinalizeCustomConditions(const std::vector<RE::TESTopicInfo*>& a_infos)
 	{
 		if (g_customConditionsFinalized) {
-			LogCustomConditionSummary();
+			LogRegistrySummary();
 			return;
 		}
 
@@ -1254,20 +1259,20 @@ namespace PCF::RuleRegistry
 					pending.file.filename().string(), pending.line, pending.targetPlugin, pending.targetReference));
 				continue;
 			}
-			const auto* file = data->LookupModByName(pending.targetPlugin);
+			const auto* file = data->FindFileByName(pending.targetPlugin);
 			if (!file) {
 				diagnostics.push_back(fmt::format("{}:{} - Missing plugin for deferred Custom condition INFO target: {} | {}",
 					pending.file.filename().string(), pending.line, pending.targetPlugin, pending.targetReference));
 				continue;
 			}
-			if ((pending.configuredFormID >> 24) != 0 && !file->IsFormInMod(pending.configuredFormID)) {
+			if ((pending.configuredFormID >> 24) != 0 && !(file->IsLight() ? (pending.configuredFormID >> 12) == (0xFE000u | file->smallFileCompileIndex) : (pending.configuredFormID >> 24) == file->compileIndex)) {
 				diagnostics.push_back(fmt::format("{}:{} - Full FormID does not belong to named plugin for deferred Custom condition INFO target: {} | {}",
 					pending.file.filename().string(), pending.line, pending.targetPlugin, pending.targetReference));
 				continue;
 			}
 
 			const auto localFormID = GetLocalFormID(file, pending.configuredFormID);
-			const auto runtimeFormID = data->LookupFormID(localFormID, pending.targetPlugin);
+			const auto runtimeFormID = data->FindFormID(localFormID, pending.targetPlugin).value_or(0);
 			const auto found = runtimeFormID ? loadedInfosByFormID.find(runtimeFormID) : loadedInfosByFormID.end();
 			if (found == loadedInfosByFormID.end() || !found->second) {
 				diagnostics.push_back(fmt::format("{}:{} - [Conditions] target did not resolve in the loaded INFO graph (runtime FormID {:08X}): {} | {}",
@@ -1292,7 +1297,7 @@ namespace PCF::RuleRegistry
 			}
 			spdlog::warn("Registry: {} deferred custom condition diagnostic issue(s):{}", diagnostics.size(), detail);
 		}
-		LogCustomConditionSummary();
+		LogRegistrySummary();
 	}
 
 	// Reports whether INFO custom-condition targets are still waiting for dialogue-ready binding.

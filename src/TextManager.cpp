@@ -7,7 +7,6 @@
 #include "PerkConditions.h"
 #include "PerkDescriptions.h"
 #include "SourcePerkNames.h"
-#include "EngineIDs.h"
 #include "NativeHooks.h"
 #include "RuleRegistry.h"
 #include "TextRewriter.h"
@@ -62,7 +61,7 @@ namespace
 		const auto* file = files && !files->empty() ? (*files)[0] : nullptr;
 		if (file) {
 			const auto localID = file->IsLight() ? formID & 0x00000FFF : formID & 0x00FFFFFF;
-			return fmt::format("{}|{:08X}", file->GetFilename(), localID);
+			return fmt::format("{}|{:08X}", file->filename.data(), localID);
 		}
 		return fmt::format("{:08X}", formID);
 	}
@@ -71,7 +70,7 @@ namespace
 	std::string GetFormName(const RE::TESForm* a_form, std::string_view a_fallback)
 	{
 		if (a_form) {
-			const auto name = RE::TESFullName::GetFullName(*a_form, false);
+			const std::string_view name = RE::TESFullName::GetFormFullName(a_form).value_or(RE::BGSLocalizedString{}).c_str();
 			if (!name.empty()) {
 				return std::string(name);
 			}
@@ -89,7 +88,7 @@ namespace
 		if (!a_form) {
 			return {};
 		}
-		const auto name = RE::TESFullName::GetFullName(*a_form, false);
+		const std::string_view name = RE::TESFullName::GetFormFullName(a_form).value_or(RE::BGSLocalizedString{}).c_str();
 		return name.empty() ? std::string{} : std::string(name);
 	}
 
@@ -409,7 +408,6 @@ namespace
 		g_textDictionary.originalPresentations.clear();
 		g_textDictionary.originalPresentations.reserve(sources.size());
 		const auto sourceNames = PCF::SourcePerkNames::LoadNames(sources);
-		std::uint32_t runtimeNameFallbacks = 0;
 		for (auto* source : sources) {
 			const auto* rule = PCF::RuleRegistry::Find(source);
 			if (!source || !rule) {
@@ -439,9 +437,6 @@ namespace
 				// renames. If resource/localization data is not ready yet, retain text swapping by
 				// falling back to the already-loaded runtime FULL name for this source only.
 				sourceName = GetVisibleSourceName(source);
-				if (!sourceName.empty()) {
-					++runtimeNameFallbacks;
-				}
 			}
 			if (sourceName.empty()) {
 				continue;
@@ -449,10 +444,6 @@ namespace
 			const auto sourceIdentity = GetSourceTextIdentity(source);
 			const auto matchKey = BuildMatchIdentity(*display);
 			AddAlias(entries, source, sourceIdentity.rank, std::move(sourceName), replacement, genericReplacement, matchKey);
-		}
-		if (runtimeNameFallbacks) {
-			spdlog::warn("Text aliases: original source-name lookup missed {} perk(s); runtime FULL-name fallback used",
-				runtimeNameFallbacks);
 		}
 		g_textDictionary.dictionary.Build(std::move(entries));
 		g_textDictionary.built = true;
@@ -465,7 +456,8 @@ namespace
 			return false;
 		}
 		const auto function = static_cast<std::uint32_t>(a_item->data.functionData.function.get());
-		const auto hasPerk = static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::FUNCTION_HAS_PERK);
+		const auto hasPerk = static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::kScript_HasPerk) +
+			static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::kScript_Offset);
 		return function == hasPerk || function == hasPerk - 0x1000;
 	}
 
@@ -632,35 +624,35 @@ namespace
 		}
 		g_messageBodyHookAttempted = true;
 		try {
-			const auto resolved = REL::IDDatabase::get().resolve(PCF::EngineIDs::BGSMessageGetConvertedDescription);
+			const auto resolved = PCF::EngineIDs::BGSMessageGetConvertedDescription.GetAddress();
 			if (!resolved) {
 				return DisableMessageTextHook();
 			}
-			const auto source = REL::Module::get().base() + *resolved.rva;
+			const auto source = resolved;
 			const auto prologueLength = GetMessageHookSize(source);
 			if (prologueLength < kMessageBodyPatchSize) {
 				return DisableMessageTextHook();
 			}
 
-			auto& trampoline = F4SE::GetTrampoline();
-			if (trampoline.empty()) {
-				const auto* trampolineInterface = F4SE::GetTrampolineInterface();
-				void* memory = trampolineInterface ? trampolineInterface->AllocateFromBranchPool(kMessageBodyTrampolineSize) : nullptr;
+			auto& trampoline = **REL::GetTrampoline();
+			if (trampoline.IsEmpty()) {
+				const auto trampolineInterface = F4SE::GetTrampolineInterface();
+				void* memory = trampolineInterface->AllocateFromBranchPool(kMessageBodyTrampolineSize);
 				if (!memory) {
 					return DisableMessageTextHook();
 				}
-				trampoline.set_trampoline(memory, kMessageBodyTrampolineSize);
+				trampoline.Init(static_cast<std::byte*>(memory), kMessageBodyTrampolineSize);
 			}
-			if (trampoline.free_size() < prologueLength + (kAbsoluteJumpSize * 2)) {
+			if (trampoline.GetFreeSize() < prologueLength + (kAbsoluteJumpSize * 2)) {
 				return DisableMessageTextHook();
 			}
 
-			auto* original = static_cast<std::uint8_t*>(trampoline.allocate(prologueLength + kAbsoluteJumpSize));
+			auto* original = reinterpret_cast<std::uint8_t*>(trampoline.Allocate(prologueLength + kAbsoluteJumpSize));
 			std::memcpy(original, reinterpret_cast<const void*>(source), prologueLength);
 			WriteJump(original + prologueLength, source + prologueLength);
 			g_messageBodyOriginal = reinterpret_cast<MessageBodyFunction>(original);
 
-			auto* relay = static_cast<std::uint8_t*>(trampoline.allocate(kAbsoluteJumpSize));
+			auto* relay = reinterpret_cast<std::uint8_t*>(trampoline.Allocate(kAbsoluteJumpSize));
 			WriteJump(relay, reinterpret_cast<std::uintptr_t>(&MessageTextHook));
 			const auto nextInstruction = source + kMessageBodyPatchSize;
 			const auto displacement = reinterpret_cast<std::intptr_t>(relay) - static_cast<std::intptr_t>(nextInstruction);
@@ -685,10 +677,6 @@ namespace
 	}
 
 
-	inline constexpr std::uintptr_t kPRKFGetRequirementsRVA = 0x13DF0;
-	inline constexpr std::uintptr_t kPRKFStringAssignRVA = 0x79A0;
-	inline constexpr std::uint32_t kPRKFImageTimestamp = 0x6A9D7778;
-	inline constexpr std::uint32_t kPRKFImageSize = 0x0007C000;
 	inline constexpr std::string_view kPRKFFailedOpen = "<font color='#fa8e47'>";
 	inline constexpr std::string_view kPRKFFailedClose = "</font>";
 	inline constexpr std::string_view kPRKFAnd = ", ";
@@ -732,12 +720,13 @@ namespace
 		}
 		const auto function = static_cast<std::uint32_t>(a_item->data.functionData.function.get());
 		const auto matches = [function](RE::SCRIPT_OUTPUT a_expected) {
-			const auto value = static_cast<std::uint32_t>(a_expected);
+			const auto value = static_cast<std::uint32_t>(a_expected) +
+				static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::kScript_Offset);
 			return function == value || (value >= 0x1000 && function == value - 0x1000);
 		};
-		if (!matches(RE::SCRIPT_OUTPUT::FUNCTION_GET_ACTOR_VALUE) &&
-			!matches(RE::SCRIPT_OUTPUT::FUNCTION_GET_BASE_ACTOR_VALUE) &&
-			!matches(RE::SCRIPT_OUTPUT::FUNCTION_GET_PERMANENT_ACTOR_VALUE)) {
+		if (!matches(RE::SCRIPT_OUTPUT::kScript_GetValue) &&
+			!matches(RE::SCRIPT_OUTPUT::kScript_GetBaseValue) &&
+			!matches(RE::SCRIPT_OUTPUT::kScript_GetPermanentValue)) {
 			return nullptr;
 		}
 		auto* form = static_cast<RE::TESForm*>(a_item->data.functionData.param[0]);
@@ -845,8 +834,6 @@ namespace
 			return true;
 		}
 
-		// PRKF can become available after PCF receives its first game-data notification.
-		// Do not permanently consume the install attempt until the module actually exists.
 		auto* module = ::GetModuleHandleW(L"PRKF.dll");
 		if (!module) {
 			spdlog::debug("RequirementLabels: PRKF.dll is not loaded yet; bridge installation deferred");
@@ -860,30 +847,29 @@ namespace
 		const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
 		const auto* nt = dos->e_magic == IMAGE_DOS_SIGNATURE ?
 			reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew) : nullptr;
-		if (!nt || nt->Signature != IMAGE_NT_SIGNATURE || nt->FileHeader.TimeDateStamp != kPRKFImageTimestamp ||
-			nt->OptionalHeader.SizeOfImage != kPRKFImageSize) {
+		const auto* build = nt && nt->Signature == IMAGE_NT_SIGNATURE &&
+			nt->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64 && nt->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC ?
+			PCF::PRKFCompatibility::FindBuild(nt->FileHeader.TimeDateStamp, nt->OptionalHeader.SizeOfImage) : nullptr;
+		if (!build || F4SE::GetRuntimeVersion() != REX::Version(
+			build->runtime[0], build->runtime[1], build->runtime[2], build->runtime[3])) {
 			spdlog::warn("RequirementLabels: unsupported PRKF.dll build; original code left untouched");
 			return false;
 		}
 
-		const auto source = base + kPRKFGetRequirementsRVA;
-		const auto stringAssign = base + kPRKFStringAssignRVA;
-		constexpr std::array<std::uint8_t, PCF::NativeHooks::kAbsoluteJumpSize> prologue{
-			0x48, 0x89, 0x5C, 0x24, 0x18,
-			0x55, 0x56, 0x57,
-			0x41, 0x54, 0x41, 0x55, 0x41, 0x56
-		};
-		constexpr std::array<std::uint8_t, 4> reqsField{ 0x4C, 0x8D, 0x71, 0x10 };
-		constexpr std::array<std::uint8_t, 5> assignPrologue{ 0x48, 0x89, 0x5C, 0x24, 0x10 };
+		const auto source = base + build->requirementsRVA;
+		const auto stringAssign = base + build->stringAssignRVA;
+		const auto& prologue = build->requirementsPrologue;
+		const auto& reqsField = build->reqsField;
+		const auto& assignPrologue = build->assignPrologue;
 		if (std::memcmp(reinterpret_cast<const void*>(source), prologue.data(), prologue.size()) != 0 ||
-			std::memcmp(reinterpret_cast<const void*>(source + 0x4E), reqsField.data(), reqsField.size()) != 0 ||
+			std::memcmp(reinterpret_cast<const void*>(source + build->reqsFieldOffset), reqsField.data(), reqsField.size()) != 0 ||
 			std::memcmp(reinterpret_cast<const void*>(stringAssign), assignPrologue.data(), assignPrologue.size()) != 0 ||
 			PCF::NativeHooks::FindSafeOverwriteLength(source, prologue.size()) != prologue.size()) {
 			spdlog::warn("RequirementLabels: PRKF formatter verification failed; original code left untouched");
 			return false;
 		}
 
-		constexpr std::size_t required = prologue.size() + PCF::NativeHooks::kAbsoluteJumpSize;
+		const std::size_t required = prologue.size() + PCF::NativeHooks::kAbsoluteJumpSize;
 		auto* original = static_cast<std::uint8_t*>(::VirtualAlloc(
 			nullptr, required, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
 		if (!original) {
@@ -911,7 +897,7 @@ namespace
 			return false;
 		}
 		g_prkfBridgeActive = true;
-		spdlog::info("RequirementLabels: PRKF requirement-text bridge active");
+		spdlog::debug("RequirementLabels: PRKF {} requirement-text bridge active", build->name);
 		return true;
 	}
 

@@ -12,7 +12,7 @@
 
 namespace PCF::UIHookState
 {
-	using Params = RE::Scaleform::GFx::FunctionHandler::Params;
+	using Params = Scaleform::GFx::FunctionHandler::Params;
 	using CallFunction = void (*)(RE::IMenu*, const Params&);
 	using ProcessMessageFunction = RE::UI_MESSAGE_RESULTS (*)(RE::IMenu*, RE::UIMessage&);
 	using AdvanceFunction = void (*)(RE::IMenu*, float, std::uint64_t);
@@ -27,7 +27,7 @@ namespace PCF::UIHookState
 
 	struct MenuHook
 	{
-		REL::ID vtableID;
+		REL::Id<> vtableID;
 		std::string_view name;
 		CallFunction call{ nullptr };
 		ProcessMessageFunction processMessage{ nullptr };

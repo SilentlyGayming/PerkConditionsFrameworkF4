@@ -15,7 +15,7 @@
 
 namespace PCF::UICommon
 {
-	using Value = RE::Scaleform::GFx::Value;
+	using Value = Scaleform::GFx::Value;
 
 	class DepthGuard
 	{
@@ -58,7 +58,7 @@ namespace PCF::UICommon
 	{
 		Value value;
 		double number = 0.0;
-		if (!a_object.IsObject() || !a_object.GetMember(a_name, &value) || !ReadNumber(value, number) ||
+		if (!a_object.IsAnyObject() || !a_object.GetMember(a_name, &value) || !ReadNumber(value, number) ||
 			number < 0.0 || number > (std::numeric_limits<std::uint32_t>::max)() || std::trunc(number) != number) {
 			return false;
 		}
@@ -70,7 +70,7 @@ namespace PCF::UICommon
 	inline bool ReadBool(const Value& a_object, const char* a_name, bool& a_boolean)
 	{
 		Value value;
-		if (!a_object.IsObject() || !a_object.GetMember(a_name, &value) || !value.IsBoolean()) {
+		if (!a_object.IsAnyObject() || !a_object.GetMember(a_name, &value) || !value.IsBoolean()) {
 			return false;
 		}
 		a_boolean = value.GetBoolean();
@@ -81,7 +81,7 @@ namespace PCF::UICommon
 	inline bool ReadText(const Value& a_object, const char* a_name, std::string& a_text)
 	{
 		Value value;
-		if (!a_object.IsObject() || !a_object.GetMember(a_name, &value) || !value.IsString()) {
+		if (!a_object.IsAnyObject() || !a_object.GetMember(a_name, &value) || !value.IsString()) {
 			return false;
 		}
 		const char* text = value.GetString();
@@ -101,14 +101,14 @@ namespace PCF::UICommon
 			return false;
 		}
 		*end = '\0';
-		return a_array.IsArray() && a_array.GetMember(key, &a_value) && a_value.IsObject();
+		return a_array.IsArray() && a_array.GetMember(key, &a_value) && a_value.IsAnyObject();
 	}
 
 	// Sets text only when the Scaleform value changes.
 	inline bool SetText(Value& a_object, const char* a_name, const std::string& a_text)
 	{
 		Value value;
-		if (!a_object.IsObject()) {
+		if (!a_object.IsAnyObject()) {
 			return false;
 		}
 		if (a_object.GetMember(a_name, &value) && value.IsString()) {
@@ -125,7 +125,7 @@ namespace PCF::UICommon
 	{
 		Value value;
 		double existing = 0.0;
-		if (!a_object.IsObject() || (a_object.GetMember(a_name, &value) && ReadNumber(value, existing) && existing == a_number)) {
+		if (!a_object.IsAnyObject() || (a_object.GetMember(a_name, &value) && ReadNumber(value, existing) && existing == a_number)) {
 			return false;
 		}
 		return a_object.SetMember(a_name, Value(a_number));
@@ -136,7 +136,7 @@ namespace PCF::UICommon
 	{
 		Value value;
 		double existing = 0.0;
-		if (!a_object.IsObject()) {
+		if (!a_object.IsAnyObject()) {
 			return false;
 		}
 		if (a_object.GetMember(a_name, &value) && ReadNumber(value, existing) && existing == a_number) {
@@ -149,7 +149,7 @@ namespace PCF::UICommon
 	inline bool SetBool(Value& a_object, const char* a_name, bool a_boolean)
 	{
 		Value value;
-		if (!a_object.IsObject() || (a_object.GetMember(a_name, &value) && value.IsBoolean() && value.GetBoolean() == a_boolean)) {
+		if (!a_object.IsAnyObject() || (a_object.GetMember(a_name, &value) && value.IsBoolean() && value.GetBoolean() == a_boolean)) {
 			return false;
 		}
 		return a_object.SetMember(a_name, Value(a_boolean));

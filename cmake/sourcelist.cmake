@@ -4,7 +4,6 @@ set(SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/hdr/CraftingMenus.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/hdr/CustomConditions.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/hdr/DialogueText.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/hdr/EngineIDs.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/hdr/NativeHooks.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/hdr/PCH.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/hdr/PerkConditions.h"

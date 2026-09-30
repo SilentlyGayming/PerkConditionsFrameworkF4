@@ -4,30 +4,37 @@ Perk Conditions Framework is an F4SE and CommonLibF4 patcher that allows mod aut
 
 ## Requirements
 
-- [CMake](https://cmake.org/)
-  - Add this to your `PATH`
-- [PowerShell](https://github.com/PowerShell/PowerShell/releases/latest)
-- [Vcpkg](https://github.com/microsoft/vcpkg)
-  - Add the environment variable `VCPKG_ROOT` with the value as the path to the folder containing vcpkg
-- [Visual Studio Community 2026](https://visualstudio.microsoft.com/)
-  - Desktop development with C++
-- [CommonLibF4RD](https://github.com/Zzyxz/CommonLibF4RD)
-  - Add this as an environment variable `CommonLibF4Path`
-- [toml++](https://github.com/marzer/tomlplusplus)
-  - Add this as an environment variable `TOMLPLUSPLUS_PATH`
+* [CMake](https://cmake.org/)
+
+  * Version 4.3 or newer; add this to your `PATH`
+* [PowerShell](https://github.com/PowerShell/PowerShell/releases/latest)
+* [Vcpkg](https://github.com/microsoft/vcpkg)
+
+  * Add the environment variable `VCPKG\_ROOT` with the value as the path to the folder containing vcpkg
+* [Visual Studio Community 2026](https://visualstudio.microsoft.com/)
+
+  * Desktop development with C++, x64 MSVC v145, and Windows SDK
+* [CommonLibF4 AV](https://github.com/LucaDotGit/CommonLibF4)
+
+  * Add this as an environment variable `CommonLibF4Path`
+* [toml++](https://github.com/marzer/tomlplusplus)
+
+  * Add this as an environment variable `TOMLPLUSPLUS\_PATH`
 
 ## User Requirements
 
-- [F4SE](https://f4se.silverlock.org/)
-- [Runtime Database](https://www.nexusmods.com/fallout4/mods/108394)
+* [F4SE](https://f4se.silverlock.org/)
+* [Address Library for F4SE Plugins](https://www.nexusmods.com/fallout4/mods/47327)
 
 ## Register Visual Studio as a Generator
 
-- Open `x64 Native Tools Command Prompt`
-- Run `cmake`
-- Close the cmd window
+* Open `x64 Native Tools Command Prompt`
+* Run `cmake`
+* Close the cmd window
 
 ## Building
+
+This archive contains source only; build the Release DLL with the CMake presets below.
 
 ```bat
 git clone https://github.com/SilentlyGayming/PerkConditionsFrameworkF4.git

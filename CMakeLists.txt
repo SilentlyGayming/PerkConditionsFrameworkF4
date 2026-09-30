@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.2)
+cmake_minimum_required(VERSION 4.3)
 
 # ---- Options ----
 
@@ -82,8 +82,8 @@ if (NOT DEFINED CommonLibF4Path)
 	message(FATAL_ERROR "CommonLibF4Path is not set.")
 endif ()
 
-if (NOT EXISTS "${CommonLibF4Path}/CommonLibF4/CMakeLists.txt")
-	message(FATAL_ERROR "CommonLibF4RD was not found at: ${CommonLibF4Path}")
+if (NOT EXISTS "${CommonLibF4Path}/CMakeLists.txt" OR NOT EXISTS "${CommonLibF4Path}/include/REL/Relocation.hpp")
+	message(FATAL_ERROR "CommonLibF4 AV was not found at: ${CommonLibF4Path}")
 endif ()
 
 if (NOT DEFINED TOMLPLUSPLUS_PATH)
@@ -95,12 +95,17 @@ if (NOT EXISTS "${TOMLPLUSPLUS_PATH}/toml.hpp")
 endif ()
 
 if (NOT TARGET CommonLibF4)
-	add_subdirectory("${CommonLibF4Path}/CommonLibF4" CommonLibF4)
+	set(COMMONLIB_RUNTIME_OG ON CACHE BOOL "" FORCE)
+	set(COMMONLIB_RUNTIME_NG ON CACHE BOOL "" FORCE)
+	set(COMMONLIB_RUNTIME_AE ON CACHE BOOL "" FORCE)
+	set(COMMONLIB_RUNTIME_VR OFF CACHE BOOL "" FORCE)
+	add_subdirectory("${CommonLibF4Path}" CommonLibF4)
 endif ()
 
 find_package(fmt REQUIRED CONFIG)
 find_package(spdlog REQUIRED CONFIG)
 find_package(ZLIB REQUIRED)
+find_package(zydis REQUIRED CONFIG)
 
 # ---- Add source files ----
 
@@ -135,7 +140,7 @@ target_compile_definitions(
 target_compile_features(
 	${PROJECT_NAME}
 	PRIVATE
-		cxx_std_20
+		cxx_std_23
 )
 
 target_include_directories(
@@ -143,6 +148,11 @@ target_include_directories(
 	PRIVATE
 		${CMAKE_CURRENT_BINARY_DIR}/hdr
 		${CMAKE_CURRENT_SOURCE_DIR}/hdr
+)
+
+target_include_directories(
+	${PROJECT_NAME}
+	SYSTEM PRIVATE
 		${TOMLPLUSPLUS_PATH}
 )
 
@@ -153,6 +163,7 @@ target_link_libraries(
 		fmt::fmt
 		spdlog::spdlog
 		ZLIB::ZLIB
+		Zydis::Zydis
 )
 
 target_precompile_headers(

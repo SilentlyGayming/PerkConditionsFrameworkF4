@@ -13,14 +13,19 @@
 
 #include <spdlog/sinks/basic_file_sink.h>
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
 
 namespace
 {
+	std::atomic<bool> g_initializationFinished{ false };
+	std::mutex g_initializationMutex;
+
 	// Writes a startup log section header.
 	void WriteLogHeader(std::string_view a_name)
 	{
@@ -31,27 +36,24 @@ namespace
 	constexpr F4SE::PluginVersionData BuildVersionInfo()
 	{
 		F4SE::PluginVersionData data;
-		data.pluginVersion = ((static_cast<std::uint32_t>(Version::MAJOR) & 0xFF) << 24) |
-			((static_cast<std::uint32_t>(Version::MINOR) & 0xFF) << 16) |
-			((static_cast<std::uint32_t>(Version::PATCH) & 0xFFF) << 4);
-		for (std::size_t i = 0; i < Version::PROJECT.size() && i < std::size(data.name) - 1; ++i) {
-			data.name[i] = Version::PROJECT[i];
-		}
-		data.addressIndependence = F4SE::PluginVersionData::kAddressIndependence_Signatures;
-		data.structureIndependence = F4SE::PluginVersionData::kStructureIndependence_1_10_980Layout |
-			F4SE::PluginVersionData::kStructureIndependence_1_11_137Layout;
+		data.SetPluginVersion(REX::Version(Version::MAJOR, Version::MINOR, Version::PATCH, 0));
+		data.SetPluginName(Version::PROJECT);
+		data.SetUseAddressLibrary_RuntimeNG(true);
+		data.SetUseAddressLibrary_RuntimeAE(true);
+		data.SetIsLayoutDependent_RuntimeNG(true);
+		data.SetIsLayoutDependent_RuntimeAE(true);
 		return data;
 	}
 	// Starts the PCF file logger.
 	bool StartLogger()
 	{
-		auto path = F4SE::log::log_directory();
-		if (!path) {
+		auto path = F4SE::GetLogDirectoryPath();
+		if (path.empty()) {
 			return false;
 		}
-		*path /= fmt::format("{}.log", Version::PROJECT);
+		path /= fmt::format("{}.log", Version::PROJECT);
 
-		auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path->string(), true);
+		auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path.string(), true);
 		auto logger = std::make_shared<spdlog::logger>("PCF", std::move(sink));
 		logger->set_level(spdlog::level::info);
 		logger->flush_on(spdlog::level::info);
@@ -59,9 +61,10 @@ namespace
 		spdlog::set_pattern("[%H:%M:%S:%e] %v");
 		return true;
 	}
-	// Loads PCF state when game data is ready and finishes INFO text after the game is created or loaded.
-	void OnGameReady(F4SE::MessagingInterface::Message* a_message)
+	// Loads PCF state when data is ready and finishes dialogue text after game entry.
+	void InitializePCF(bool a_gameDataReady, bool a_gameStateReady)
 	{
+		std::scoped_lock lock(g_initializationMutex);
 		static bool dataReady = false;
 		static bool registryLoaded = false;
 		static bool conditionsInstalled = false;
@@ -77,24 +80,13 @@ namespace
 		static std::vector<std::string> infoLogLines;
 		static std::vector<std::string> topicLogLines;
 		static bool uiInstalled = false;
-		static bool finished = false;
 
-		if (!a_message || finished) {
+		if (g_initializationFinished.load(std::memory_order_acquire)) {
 			return;
 		}
-		const bool gameDataReady = a_message->type == F4SE::MessagingInterface::kGameDataReady;
-		const bool newGameReady = a_message->type == F4SE::MessagingInterface::kNewGame;
-		const bool postLoadGame = a_message->type == F4SE::MessagingInterface::kPostLoadGame;
-		if (postLoadGame && !a_message->data) {
-			return;
-		}
-		const bool gameStateReady = newGameReady || postLoadGame;
-		if (gameDataReady) {
-			if (!a_message->data) {
-				return;
-			}
+		if (a_gameDataReady) {
 			dataReady = true;
-		} else if (!dataReady || !gameStateReady) {
+		} else if (!dataReady || !a_gameStateReady) {
 			return;
 		}
 
@@ -130,7 +122,7 @@ namespace
 
 			std::vector<RE::TESTopicInfo*> startupInfoSnapshot;
 			const std::vector<RE::TESTopicInfo*>* startupInfos = nullptr;
-			if (gameStateReady && !PCF::RuleRegistry::CustomConditionsFinalized()) {
+			if (a_gameStateReady && !PCF::RuleRegistry::CustomConditionsFinalized()) {
 				startupInfoSnapshot = PCF::DialogueText::CollectLoadedInfoForStartup();
 				startupInfos = std::addressof(startupInfoSnapshot);
 				PCF::RuleRegistry::FinalizeCustomConditions(startupInfoSnapshot);
@@ -178,7 +170,7 @@ namespace
 					spdlog::info("No active PCF rules");
 					spdlog::info("Initialization complete");
 				}
-				finished = true;
+				g_initializationFinished.store(true, std::memory_order_release);
 				return;
 			}
 
@@ -212,7 +204,7 @@ namespace
 			}
 			// MESSAGE/INFO source text depends on fully initialized localized game data. Do not
 			// permanently build the shared alias dictionary on the earlier GameDataReady event.
-			if (!gameStateReady) {
+			if (!a_gameStateReady) {
 				return;
 			}
 			if (!textApplied) {
@@ -226,7 +218,7 @@ namespace
 			if (perkRulesActive && !textHooksInstalled) {
 				spdlog::warn("Condition and UI hook systems active; MESSAGE body text hook unavailable");
 			} else {
-				spdlog::info("Required PCF hook systems active");
+				spdlog::info("Condition, text, and menu hook systems active");
 			}
 			WriteLogHeader("RESULT");
 			spdlog::info("Registered {} aliases; modified {} message button(s), {} dialogue choice(s), and {} topic name(s)",
@@ -245,9 +237,66 @@ namespace
 				spdlog::info("{}", line);
 			}
 			spdlog::info("Initialization complete");
-			finished = true;
+			g_initializationFinished.store(true, std::memory_order_release);
 		} catch (const std::exception& error) {
 			spdlog::error("PCF initialization failed: {}", error.what());
+		}
+	}
+
+	class GameEntryListener final : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+	{
+	public:
+		// Defers initialization until menu closure has completed on the game thread.
+		RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent& a_event,
+			RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
+		{
+			if (!g_initializationFinished.load(std::memory_order_acquire) && !a_event.opening &&
+				(a_event.menuName == RE::LoadingMenu::MENU_NAME.data() || a_event.menuName == RE::MainMenu::MENU_NAME.data())) {
+				F4SE::GetTaskInterface()->AddTask([] {
+					auto* ui = RE::UI::GetSingleton();
+					auto* player = RE::PlayerCharacter::GetSingleton();
+					if (!ui || !player || !player->GetParentCell() ||
+						ui->IsMenuOpen<RE::MainMenu>().value_or(false) ||
+						ui->IsMenuOpen<RE::LoadingMenu>().value_or(false)) {
+						return;
+					}
+					InitializePCF(false, true);
+				});
+			}
+			return RE::BSEventNotifyControl::kContinue;
+		}
+	};
+
+	// Registers the game-entry fallback once the UI singleton exists.
+	void InstallGameEntryListener()
+	{
+		static GameEntryListener listener;
+		static bool registered = false;
+		if (!registered) {
+			if (auto* ui = RE::UI::GetSingleton()) {
+				auto* source = static_cast<RE::BSTEventSource<RE::MenuOpenCloseEvent>*>(ui);
+				registered = source->RegisterSink(std::addressof(listener));
+			}
+		}
+	}
+
+	// Handles F4SE readiness messages and registers the main-menu coc fallback.
+	void OnGameReady(F4SE::MessagingInterface::Message* a_message)
+	{
+		if (!a_message || g_initializationFinished.load(std::memory_order_acquire)) {
+			return;
+		}
+		const auto type = a_message->GetType();
+		const bool gameDataReady = type == F4SE::MessagingInterface::MessageType::kGameDataReady;
+		if (type == F4SE::MessagingInterface::MessageType::kInputLoaded ||
+			type == F4SE::MessagingInterface::MessageType::kGameLoaded || gameDataReady) {
+			InstallGameEntryListener();
+		}
+		if (gameDataReady && a_message->data()) {
+			InitializePCF(true, false);
+		} else if (type == F4SE::MessagingInterface::MessageType::kNewGame ||
+			(type == F4SE::MessagingInterface::MessageType::kPostLoadGame && a_message->data())) {
+			InitializePCF(false, true);
 		}
 	}
 
@@ -257,21 +306,31 @@ extern "C"
 {
 	__declspec(dllexport) constinit F4SE::PluginVersionData F4SEPlugin_Version = BuildVersionInfo();
 }
+extern "C" __declspec(dllexport) bool F4SE_API F4SEPlugin_Query(const F4SE::QueryInterface* a_f4se, F4SE::PluginInfo* a_info)
+{
+	if (!a_f4se || !a_info || a_f4se->IsEditor()) {
+		return false;
+	}
+	a_info->SetDataVersion(F4SE::PluginInfo::DATA_VERSION);
+	a_info->SetPluginName(Version::PROJECT);
+	a_info->SetPluginVersion(REX::Version(Version::MAJOR, Version::MINOR, Version::PATCH, 0));
+	return a_f4se->GetRuntimeVersion() == REX::Version(1, 10, 163, 0);
+}
 // Starts PCF through the F4SE plugin entry point.
-extern "C" __declspec(dllexport) bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
+extern "C" __declspec(dllexport) bool F4SE_API F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 {
 	if (!a_f4se || a_f4se->IsEditor()) {
 		return false;
 	}
 	try {
+		F4SE::Init(a_f4se);
 		if (!StartLogger()) {
 			return false;
 		}
-		F4SE::Init(a_f4se);
-		spdlog::info("{} v{} on Fallout 4 {}", Version::PROJECT, Version::NAME, a_f4se->RuntimeVersion().string());
+		spdlog::info("{} v{} on Fallout 4 {}", Version::PROJECT, Version::NAME, a_f4se->GetRuntimeVersion().ToString<char>());
 		PCF::DialogueText::InstallEarlyHooks();
-		auto* messaging = F4SE::GetMessagingInterface();
-		if (!messaging || !messaging->RegisterListener(OnGameReady)) {
+		const auto messaging = F4SE::GetMessagingInterface();
+		if (!messaging->RegisterListener(OnGameReady, "F4SE")) {
 			spdlog::error("F4SE messaging unavailable");
 			return false;
 		}

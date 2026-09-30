@@ -11,7 +11,7 @@
 
 namespace
 {
-	using ConditionFunction = RE::SCRIPT_FUNCTION::ConditionFunction_t;
+	using ConditionFunction = RE::SCRIPT_FUNCTION::ConditionFunctionType;
 	ConditionFunction* g_hasPerk{ nullptr };
 	ConditionFunction* g_dialogueHasPerk{ nullptr };
 	bool g_installed{ false };
@@ -149,8 +149,10 @@ namespace PCF::PerkConditions
 			return nullptr;
 		}
 		const auto function = static_cast<std::uint32_t>(a_item->data.functionData.function.get());
-		const auto hasPerk = static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::FUNCTION_HAS_PERK);
-		const auto dialogueHasPerk = static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::FUNCTION_DIALOGUE_HASPERK);
+		const auto hasPerk = static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::kScript_HasPerk) +
+			static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::kScript_Offset);
+		const auto dialogueHasPerk = static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::kScript_DialogueHasPerk) +
+			static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::kScript_Offset);
 		if (function != hasPerk && function != hasPerk - 0x1000 &&
 			function != dialogueHasPerk && function != dialogueHasPerk - 0x1000) {
 			return nullptr;
@@ -165,8 +167,8 @@ namespace PCF::PerkConditions
 			return false;
 		}
 		const auto compare = a_item->GetComparisonValue();
-		return std::isfinite(compare) && !CheckBoolean(0.0F, a_item->data.condition, compare) &&
-			CheckBoolean(1.0F, a_item->data.condition, compare);
+		return std::isfinite(compare) && !CheckBoolean(0.0F, static_cast<RE::ENUM_COMPARISON_CONDITION>(a_item->data.condition), compare) &&
+			CheckBoolean(1.0F, static_cast<RE::ENUM_COMPARISON_CONDITION>(a_item->data.condition), compare);
 	}
 	// Gets the player's current numeric rank for a perk family.
 	float GetPlayerPerkRank(RE::PlayerCharacter* a_player, RE::BGSPerk* a_perk)
@@ -185,7 +187,7 @@ namespace PCF::PerkConditions
 			if (!resolved || resolved.kind == PCF::PerkRankType::kInternal) {
 				break;
 			}
-			if (a_player->HasPerk(resolved.perk)) {
+			if (a_player->GetPerkRank(resolved.perk) != 0) {
 				highest = rank;
 			}
 		}

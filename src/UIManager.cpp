@@ -40,11 +40,11 @@ namespace PCF::UIManager
 		auto& hooks = PCF::UIHookState::GetHooks();
 		for (std::size_t i = 0; i < hooks.size(); ++i) {
 			auto& hook = hooks[i];
-			const auto resolved = REL::IDDatabase::get().resolve(hook.vtableID);
+			const auto resolved = hook.vtableID.GetAddress();
 			if (!resolved) {
-				return fail(fmt::format("{} vtable: {}", hook.name, REL::id_resolve_status_text(resolved.status)));
+				return fail(fmt::format("{} vtable: {}", hook.name, "Address Library ID unavailable"));
 			}
-			vtables[i] = REL::Module::get().base() + *resolved.rva;
+			vtables[i] = resolved;
 			const auto* table = reinterpret_cast<const std::uintptr_t*>(vtables[i]);
 			if (i == kWorkshopIndex) {
 				if (!table[kCallSlot] || !table[kProcessMessageSlot] || !table[kAdvanceSlot] || !table[kPreDisplaySlot]) {
@@ -60,11 +60,11 @@ namespace PCF::UIManager
 			}
 		}
 
-		const auto inputLookup = REL::IDDatabase::get().resolve(RE::VTABLE::WorkshopMenu[1]);
+		const auto inputLookup = RE::VTABLE::WorkshopMenu[1].GetAddress();
 		if (!inputLookup) {
-			return fail(fmt::format("WorkshopMenu input vtable: {}", REL::id_resolve_status_text(inputLookup.status)));
+			return fail(fmt::format("WorkshopMenu input vtable: {}", "Address Library ID unavailable"));
 		}
-		const auto inputVtable = REL::Module::get().base() + *inputLookup.rva;
+		const auto inputVtable = inputLookup;
 		const auto* inputTable = reinterpret_cast<const std::uintptr_t*>(inputVtable);
 		if (!inputTable[kButtonEventSlot]) {
 			return fail("WorkshopMenu ButtonEvent callback");
