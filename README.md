@@ -34,7 +34,7 @@ Perk Conditions Framework is an F4SE and CommonLibF4 patcher that allows mod aut
 
 ## Building
 
-Double-click `build.bat` to prepare the pinned dependencies and build the Release DLL. This archive contains source only.
+This archive contains source only; build the Release DLL with the CMake presets below.
 
 ```bat
 git clone https://github.com/SilentlyGayming/PerkConditionsFrameworkF4.git
