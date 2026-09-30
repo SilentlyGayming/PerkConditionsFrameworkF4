@@ -12,7 +12,6 @@
 #include "UICommon.h"
 #include "UIManager.h"
 
-#include "EngineIDs.h"
 #include <Zydis/Zydis.h>
 
 #include <algorithm>
@@ -156,17 +155,6 @@ namespace
 	std::atomic_uint32_t g_workshopDisplayKey{ 0 };
 	std::atomic_bool g_workshopPresentationVerifyPending{ false };
 	std::atomic_bool g_workshopPreDisplayPending{ false };
-	std::array<RE::BSGFxShaderFXTarget*, kWorkshopRequirementSlots> GetWorkshopPanels(RE::WorkshopMenu::FXWorkshopMenu* a_base)
-	{
-		if (!a_base) {
-			return {};
-		}
-		const auto address = reinterpret_cast<std::uintptr_t>(a_base);
-		return {
-			*reinterpret_cast<RE::BSGFxShaderFXTarget**>(address + 0x1C8),
-			*reinterpret_cast<RE::BSGFxShaderFXTarget**>(address + 0x1D0)
-		};
-	}
 // Returns the TESForm represented by a display alternative.
 	RE::TESForm* GetDisplayForm(const PCF::PerkAlternative& a_alternative)
 	{
@@ -189,7 +177,7 @@ namespace
 	bool IsHostVisible(RE::IMenu* a_menu, bool& a_visible)
 	{
 		a_visible = true;
-		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = RE::DynamicCast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase || !workshop->workshopMenuBase->requirementsBase) {
 			return false;
 		}
@@ -300,7 +288,7 @@ namespace
 	bool HasDisplayMember(const Value& a_object, std::string_view a_name)
 	{
 		Value member;
-		return a_object.IsObject() && a_object.GetMember(a_name.data(), &member) && member.IsDisplayObject();
+		return a_object.IsAnyObject() && a_object.GetMember(a_name.data(), &member) && member.IsDisplayObject();
 	}
 
 	// Builds a version number used to check saved panel owners.
@@ -317,7 +305,7 @@ namespace
 	// Reads saved Workshop panel owners.
 	bool GetSavedPanelOwners(RE::IMenu* a_menu, std::uint32_t a_generation, PanelOwners& a_ownership)
 	{
-		if (!a_menu || !a_menu->menuObj.IsObject()) {
+		if (!a_menu || !a_menu->menuObj.IsAnyObject()) {
 			return false;
 		}
 		bool resolved = false;
@@ -344,7 +332,7 @@ namespace
 	// Saves Workshop panel owners for the current menu.
 	void SavePanelOwners(RE::IMenu* a_menu, const PanelOwners& a_ownership)
 	{
-		if (!a_menu || !a_menu->menuObj.IsObject()) {
+		if (!a_menu || !a_menu->menuObj.IsAnyObject()) {
 			return;
 		}
 		SetNumber(a_menu->menuObj, kWorkshopVisualGeneration.data(), static_cast<double>(a_ownership.generation));
@@ -359,7 +347,7 @@ namespace
 	PanelOwners FindPanelOwners(RE::IMenu* a_menu)
 	{
 		PanelOwners ownership;
-		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = RE::DynamicCast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase) {
 			return ownership;
 		}
@@ -370,7 +358,9 @@ namespace
 			return ownership;
 		}
 
-		const auto panels = GetWorkshopPanels(base);
+		const std::array<RE::BSGFxShaderFXTarget*, kWorkshopRequirementSlots> panels{
+			base->perkPanel01.get(), base->perkPanel02.get()
+		};
 		for (std::size_t i = 0; i < panels.size(); ++i) {
 			if (HasDisplayMember(baseValue, kWorkshopFallUIShadowOwners[i])) {
 				ownership.ownerFlags[i] |= kOwnerShadow;
@@ -391,7 +381,7 @@ namespace
 	// Changes visibility while saving the original value.
 	bool SetOwnedVisible(Value& a_object, bool a_visible)
 	{
-		if (!a_object.IsObject()) {
+		if (!a_object.IsAnyObject()) {
 			return false;
 		}
 		Value saved;
@@ -417,7 +407,7 @@ namespace
 	void ReleaseOwnedVisible(Value& a_object)
 	{
 		Value saved;
-		if (a_object.IsObject() && a_object.GetMember(kWorkshopSavedVisible.data(), &saved) && saved.IsBoolean()) {
+		if (a_object.IsAnyObject() && a_object.GetMember(kWorkshopSavedVisible.data(), &saved) && saved.IsBoolean()) {
 			a_object.SetMember(kWorkshopSavedVisible.data(), Value());
 		}
 	}
@@ -430,7 +420,7 @@ namespace
 	// Changes alpha while saving the original value.
 	bool SetOwnedAlpha(Value& a_object, bool a_visible)
 	{
-		if (!a_object.IsObject()) {
+		if (!a_object.IsAnyObject()) {
 			return false;
 		}
 		Value value;
@@ -458,7 +448,7 @@ namespace
 	{
 		Value value;
 		double savedAlpha = 0.0;
-		if (!a_object.IsObject() || !a_object.GetMember(kWorkshopSavedAlpha.data(), &value) || !ReadNumber(value, savedAlpha)) {
+		if (!a_object.IsAnyObject() || !a_object.GetMember(kWorkshopSavedAlpha.data(), &value) || !ReadNumber(value, savedAlpha)) {
 			return;
 		}
 		double alpha = 0.0;
@@ -511,12 +501,14 @@ namespace
 	// Sets all PCF-controlled visibility for one Workshop slot.
 	bool SetSlotVisibility(RE::IMenu* a_menu, std::size_t a_slot, bool a_visible)
 	{
-		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = RE::DynamicCast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase || a_slot >= kWorkshopRequirementSlots) {
 			return false;
 		}
 		auto* base = workshop->workshopMenuBase.get();
-		const auto panels = GetWorkshopPanels(base);
+		const std::array<RE::BSGFxShaderFXTarget*, kWorkshopRequirementSlots> panels{
+			base->perkPanel01.get(), base->perkPanel02.get()
+		};
 		auto* panel = panels[a_slot];
 		if (!panel) {
 			return false;
@@ -546,12 +538,14 @@ namespace
 	// Releases all PCF control for one Workshop slot.
 	void ReleaseSlotOwnership(RE::IMenu* a_menu, std::size_t a_slot)
 	{
-		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = RE::DynamicCast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase || a_slot >= kWorkshopRequirementSlots) {
 			return;
 		}
 		auto* base = workshop->workshopMenuBase.get();
-		const auto panels = GetWorkshopPanels(base);
+		const std::array<RE::BSGFxShaderFXTarget*, kWorkshopRequirementSlots> panels{
+			base->perkPanel01.get(), base->perkPanel02.get()
+		};
 		auto* panel = panels[a_slot];
 		if (!panel) {
 			return;
@@ -577,7 +571,7 @@ namespace
 		}
 		for (const auto* member : { "PerkName_tf", "Requires_tf", "PerkLock_mc", "PerkLoaderClip_mc" }) {
 			Value child;
-			if (panelValue.GetMember(member, &child) && child.IsObject()) {
+			if (panelValue.GetMember(member, &child) && child.IsAnyObject()) {
 				ReleaseOwnedVisible(child);
 			}
 		}
@@ -617,7 +611,7 @@ namespace
 		};
 		const auto mixMember = [&mix, &mixString, &mixVisible](const Value& a_panelValue, const char* a_name, bool a_text) {
 			Value member;
-			if (!a_panelValue.IsObject() || !a_panelValue.GetMember(a_name, &member) || !member.IsObject()) {
+			if (!a_panelValue.IsAnyObject() || !a_panelValue.GetMember(a_name, &member) || !member.IsAnyObject()) {
 				mix(0u);
 				return;
 			}
@@ -664,14 +658,14 @@ namespace
 	bool GetPresentationKey(RE::IMenu* a_menu, std::uint32_t& a_fingerprint)
 	{
 		a_fingerprint = kHashOffset;
-		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = RE::DynamicCast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase) {
 			return false;
 		}
 		auto* base = workshop->workshopMenuBase.get();
 		bool hostVisible = true;
 		AddToHash(a_fingerprint, IsHostVisible(a_menu, hostVisible) ? (hostVisible ? 3u : 2u) : 1u);
-		const auto panels = GetWorkshopPanels(base);
+		const std::array panels{ base->perkPanel01.get(), base->perkPanel02.get() };
 		bool foundPanel = false;
 		for (std::size_t i = 0; i < panels.size(); ++i) {
 			AddToHash(a_fingerprint, static_cast<std::uint32_t>(i + 1));
@@ -839,7 +833,7 @@ namespace
 	// Finds the active Workshop recipe and selection.
 	WorkshopStatus FindWorkshopContext(RE::IMenu* a_menu, WorkshopSelection& a_selection)
 	{
-		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = RE::DynamicCast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase) {
 			return WorkshopStatus::kMenuUnavailable;
 		}
@@ -973,7 +967,7 @@ namespace
 			const auto& requirement = a_selection.requirements[i];
 			Value row;
 			a_menu->uiMovie->CreateObject(&row);
-			if (!row.IsObject()) {
+			if (!row.IsAnyObject()) {
 				return false;
 			}
 			if (requirement.custom) {
@@ -1125,9 +1119,9 @@ namespace
 			auto& slot = plan[i];
 			const auto panelName = kPerkPanelNames[i];
 			std::string currentTitle;
-			if (!a_interface->GetMember(a_data, panelName.data(), &slot.panel, a_displayObject) || !slot.panel.IsObject() ||
-				!slot.panel.GetMember("PerkName_tf", &slot.nameField) || !slot.nameField.IsObject() ||
-				!slot.panel.GetMember("PerkLoaderClip_mc", &slot.loader) || !slot.loader.IsObject() ||
+			if (!a_interface->GetMember(a_data, panelName.data(), &slot.panel, a_displayObject) || !slot.panel.IsAnyObject() ||
+				!slot.panel.GetMember("PerkName_tf", &slot.nameField) || !slot.nameField.IsAnyObject() ||
+				!slot.panel.GetMember("PerkLoaderClip_mc", &slot.loader) || !slot.loader.IsAnyObject() ||
 				!ReadElement(rows, static_cast<std::uint32_t>(i), slot.row) || !ReadText(slot.row, "perkName", slot.title) ||
 				!ReadText(slot.nameField, "text", currentTitle)) {
 				return native();
@@ -1205,27 +1199,27 @@ namespace
 			return false;
 		}
 		Value a_panel(a_panelTarget);
-		if (!a_panel.IsObject()) {
+		if (!a_panel.IsAnyObject()) {
 			return false;
 		}
 		bool changed = false;
 		Value name;
 		Value requirementField;
 		Value lock;
-		if (!a_panel.GetMember("PerkName_tf", &name) || !name.IsObject() ||
-			!a_panel.GetMember("Requires_tf", &requirementField) || !requirementField.IsObject()) {
+		if (!a_panel.GetMember("PerkName_tf", &name) || !name.IsAnyObject() ||
+			!a_panel.GetMember("Requires_tf", &requirementField) || !requirementField.IsAnyObject()) {
 			return false;
 		}
 		const auto* presentation = a_requirement.presentation;
 		changed = SetBool(a_panel, "visible", true) || changed;
 		for (const auto* member : { "PerkName_tf", "Requires_tf" }) {
 			Value child;
-			if (a_panel.GetMember(member, &child) && child.IsObject()) {
+			if (a_panel.GetMember(member, &child) && child.IsAnyObject()) {
 				changed = SetShownVisible(child, true) || changed;
 			}
 		}
 		Value loader;
-		if (a_panel.GetMember("PerkLoaderClip_mc", &loader) && loader.IsObject()) {
+		if (a_panel.GetMember("PerkLoaderClip_mc", &loader) && loader.IsAnyObject()) {
 			const auto identity = GetWorkshopArtworkKey(a_selection, a_requirement);
 			const auto& state = g_workshopArtwork[a_slot];
 			std::uint32_t token = 0;
@@ -1258,7 +1252,7 @@ namespace
 				changed = SetText(requirementField, "text", text) || changed;
 			}
 		}
-		if (a_panel.GetMember("PerkLock_mc", &lock) && lock.IsObject()) {
+		if (a_panel.GetMember("PerkLock_mc", &lock) && lock.IsAnyObject()) {
 			changed = SetShownVisible(lock, a_requirement.locked) || changed;
 		}
 		return changed;
@@ -1266,11 +1260,13 @@ namespace
 	// Clears Workshop slots that are no longer needed.
 	bool ClearUnusedSlots(RE::IMenu* a_menu, std::size_t a_firstUnused)
 	{
-		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = RE::DynamicCast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase) {
 			return false;
 		}
-		const auto panels = GetWorkshopPanels(workshop->workshopMenuBase.get());
+		const std::array<RE::BSGFxShaderFXTarget*, kWorkshopRequirementSlots> panels{
+			workshop->workshopMenuBase->perkPanel01.get(), workshop->workshopMenuBase->perkPanel02.get()
+		};
 		bool changed = false;
 		for (std::size_t i = (std::min)(a_firstUnused, panels.size()); i < panels.size(); ++i) {
 			if (!panels[i]) {
@@ -1280,7 +1276,7 @@ namespace
 			Value panel(*panels[i]);
 			for (const auto* member : { "PerkName_tf", "Requires_tf", "PerkLock_mc", "PerkLoaderClip_mc" }) {
 				Value child;
-				if (panel.GetMember(member, &child) && child.IsObject()) {
+				if (panel.GetMember(member, &child) && child.IsAnyObject()) {
 					changed = SetOwnedVisible(child, false) || changed;
 					if (std::string_view(member) == "PerkName_tf" || std::string_view(member) == "Requires_tf") {
 						changed = SetText(child, "text", "") || changed;
@@ -1302,12 +1298,12 @@ namespace
 	// Shows the prepared requirements on the Workshop cards.
 	bool ShowWorkshopDisplay(RE::IMenu* a_menu, const WorkshopSelection& a_selection, std::size_t& a_panels, std::size_t& a_changed)
 	{
-		auto* workshop = static_cast<RE::WorkshopMenu*>(a_menu);
+		auto* workshop = RE::DynamicCast<RE::WorkshopMenu*>(a_menu);
 		if (!workshop || !workshop->workshopMenuBase) {
 			return false;
 		}
 		auto* base = workshop->workshopMenuBase.get();
-		const auto panels = GetWorkshopPanels(base);
+		const std::array<RE::BSGFxShaderFXTarget*, 2> panels{ base->perkPanel01.get(), base->perkPanel02.get() };
 		for (std::size_t i = 0; i < panels.size(); ++i) {
 			if (panels[i]) {
 				++a_panels;
@@ -1416,7 +1412,7 @@ namespace
 			return;
 		}
 
-		auto* workshop = a_user ? static_cast<RE::WorkshopMenu*>(a_user) : nullptr;
+		auto* workshop = a_user ? RE::DynamicCast<RE::WorkshopMenu*>(a_user) : nullptr;
 		RE::IMenu* menu = workshop;
 		const bool active = menu && HasWorkshopChanges(menu);
 		if (active && a_event) {
@@ -1565,7 +1561,7 @@ namespace
 			return false;
 		}
 		REL::Relocation<std::uintptr_t> vtable{ a_vtable };
-		const auto previous = vtable.WriteVirtualCall(a_slot, replacement);
+		const auto previous = vtable.WriteVirtualCall(a_slot, reinterpret_cast<std::uintptr_t>(a_replacement));
 		a_original = reinterpret_cast<Function>(previous);
 		return a_original != nullptr && PCF::NativeHooks::IsVtableSlotSet(a_vtable, a_slot, replacement);
 	}
@@ -1583,9 +1579,8 @@ namespace
 	// Finds the Workshop call that writes perkData.
 	std::uintptr_t FindPerkDataCall(std::uintptr_t a_owner, std::uintptr_t a_append, std::uintptr_t a_setMember)
 	{
-		const auto& module = REL::Module::GetSingleton();
-		const auto text = module->GetSection(REL::MODULE_SECTION_NAME_TEXT);
-		const auto data = module->GetSection(REL::MODULE_SECTION_NAME_RDATA);
+		const auto text = REL::Module::GetSingleton()->GetSection(REL::MODULE_SECTION_NAME_TEXT);
+		const auto data = REL::Module::GetSingleton()->GetSection(REL::MODULE_SECTION_NAME_RDATA);
 		if (a_owner < text.GetAddress() || a_owner - text.GetAddress() >= text.GetSize()) {
 			return 0;
 		}
@@ -1654,9 +1649,12 @@ namespace
 	{
 		constexpr std::size_t absoluteJumpSize = 14;
 		try {
-			const auto owner = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::WorkshopPublishRequirements }.GetAddress();
-			const auto append = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::WorkshopAppendPerkRow }.GetAddress();
-			const auto setMember = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::GFxSetMember }.GetAddress();
+			const auto owner = PCF::EngineIDs::WorkshopPublishRequirements.GetAddress();
+			const auto append = PCF::EngineIDs::WorkshopAppendPerkRow.GetAddress();
+			const auto setMember = PCF::EngineIDs::GFxSetMember.GetAddress();
+			if (!owner || !append || !setMember) {
+				return false;
+			}
 			const auto call = FindPerkDataCall(owner, append, setMember);
 			if (!call) {
 				return false;
@@ -1665,18 +1663,18 @@ namespace
 			if (trampoline.IsEmpty()) {
 				constexpr std::size_t size = 64;
 				const auto api = F4SE::GetTrampolineInterface();
-				auto* memory = static_cast<std::byte*>(api->AllocateFromBranchPool(size));
+				auto* memory = api->AllocateFromBranchPool(size);
 				if (!memory) {
 					return false;
 				}
-				trampoline.Init(memory, size);
+				trampoline.Init(static_cast<std::byte*>(memory), size);
 			}
 			if (trampoline.GetFreeSize() < absoluteJumpSize) {
 				return false;
 			}
 			const auto expectedSetMember = setMember;
 			g_workshopSetMember = reinterpret_cast<WorkshopSetMemberFunction>(expectedSetMember);
-			const auto previous = trampoline.WriteCall<5>(call, reinterpret_cast<std::uintptr_t>(&WorkshopSetPerkData));
+			const auto previous = trampoline.WriteCall<5>(call, WorkshopSetPerkData);
 			if (previous) {
 				g_workshopSetMember = reinterpret_cast<WorkshopSetMemberFunction>(previous);
 			}

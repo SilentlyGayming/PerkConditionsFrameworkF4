@@ -4,7 +4,6 @@
 
 #include "PCH.h"
 #include "DialogueText.h"
-#include "EngineIDs.h"
 #include "NativeHooks.h"
 #include "PerkConditions.h"
 #include "RuleRegistry.h"
@@ -36,6 +35,7 @@ namespace
 	using LocalizedSubrecordLoadFunction = void (*)(RE::BGSLocalizedString*, RE::TESFile*);
 	using ResponseTextLoadFunction = void (*)(RE::TESResponse*, RE::TESFile*);
 	using RNAMInsertFunction = std::uint8_t (*)(void*, const void*, const RE::BGSLocalizedString*, void*);
+	using RNAMInsertFunctionOG = std::uint8_t (*)(void*, void*, std::uint32_t, const void*, const RE::BGSLocalizedString*, void*);
 	using InfoInitFunction = void (*)(RE::TESTopicInfo*);
 
 	enum class InfoTextPhase : std::uint8_t
@@ -115,6 +115,7 @@ namespace
 	LocalizedSubrecordLoadFunction g_rnamLocalizedLoadOriginal{ nullptr };
 	ResponseTextLoadFunction g_responseTextLoadOriginal{ nullptr };
 	RNAMInsertFunction g_rnamInsertOriginal{ nullptr };
+	RNAMInsertFunctionOG g_rnamInsertOriginalOG{ nullptr };
 	InfoInitFunction g_infoInitOriginal{ nullptr };
 	bool g_infoEarlyHookAttempted{ false };
 	std::atomic<InfoTextPhase> g_infoTextPhase{ InfoTextPhase::kCapturing };
@@ -134,9 +135,10 @@ namespace
 	std::unordered_set<std::uint32_t> g_playerDialogueTopicIDs;
 	std::unordered_set<std::uint32_t> g_startupPendingInfos;
 	thread_local const RE::TESFile* g_pendingRNAMProviderFile{ nullptr };
-	constexpr std::uintptr_t kResponseTextLoadCallOffset = 0x1C1;
-	constexpr std::uintptr_t kRNAMLocalizedLoadCallOffset = 0x5BE;
-	constexpr std::uintptr_t kRNAMInsertCallOffset = 0x5DA;
+	constexpr F4SE::VariantOffset kResponseTextLoadCallOffset{ 0x14D, 0x1C1, 0x1C1 };
+	constexpr F4SE::VariantOffset kRNAMLocalizedLoadCallOffset{ 0x4FB, 0x5BE, 0x5BE };
+	constexpr F4SE::VariantOffset kRNAMInsertCallOffset{ 0x53D, 0x5DA, 0x5DA };
+	constexpr std::uintptr_t kRNAMInsertRetryCallOffsetOG = 0x583;
 	constexpr std::size_t kDirectCallSize = 5;
 	constexpr std::size_t kInfoInitVtableSlot = 0x16;
 	constexpr std::size_t kDialogueRewriteLogCapacity = 4096;
@@ -245,9 +247,8 @@ namespace
 				if (!a_perk) {
 					return false;
 				}
-				const auto fullName = RE::TESFullName::GetFormFullName(a_perk);
-				const char* name = fullName ? fullName->data() : nullptr;
-				return name && name[0] && SameRequirementText(a_marker, name);
+				const std::string_view name = RE::TESFullName::GetFormFullName(a_perk).value_or(RE::BGSLocalizedString{}).c_str();
+				return !name.empty() && SameRequirementText(a_marker, name);
 			};
 			if (matches(source)) {
 				return true;
@@ -421,7 +422,7 @@ namespace
 						auto* topic = storedTopic;
 						const auto raw = reinterpret_cast<std::uintptr_t>(storedTopic);
 						if (raw && raw <= std::numeric_limits<std::uint32_t>::max()) {
-							topic = RE::TESForm::FindFormByID<RE::TESTopic>(static_cast<std::uint32_t>(raw));
+							topic = RE::DynamicCast<RE::TESTopic*>(RE::TESForm::FindFormByID(static_cast<std::uint32_t>(raw)));
 						}
 						if (topic) {
 							topics.insert(topic->GetFormID());
@@ -528,6 +529,33 @@ namespace
 		const auto* providerFile = g_pendingRNAMProviderFile;
 		g_pendingRNAMProviderFile = nullptr;
 		const std::uint8_t inserted = g_rnamInsertOriginal ? g_rnamInsertOriginal(a_map, a_key, a_value, a_result) : std::uint8_t{ 0 };
+		if (!inserted || !a_key || !a_value ||
+			g_infoTextPhase.load(std::memory_order_acquire) == InfoTextPhase::kDisabled) {
+			return inserted;
+		}
+		auto* info = *reinterpret_cast<RE::TESTopicInfo* const*>(a_key);
+		if (!info) {
+			return inserted;
+		}
+		std::string direct(static_cast<std::string_view>(*a_value));
+		{
+			std::scoped_lock lock(g_infoPromptMutex);
+			g_directPromptCaptures.try_emplace(info->GetFormID(), direct);
+			if (providerFile) {
+				g_directPromptProviders[info->GetFormID()] = std::string(providerFile->filename.data());
+			}
+		}
+		return inserted;
+	}
+
+	// Lets the RNAM insert continue and saves its source before the temporary text is released.
+	std::uint8_t RNAMInsertHookOG(void* a_map, void* a_entries, std::uint32_t a_hash, const void* a_key, const RE::BGSLocalizedString* a_value, void* a_result)
+	{
+		const auto* providerFile = g_pendingRNAMProviderFile;
+		const std::uint8_t inserted = g_rnamInsertOriginalOG ? g_rnamInsertOriginalOG(a_map, a_entries, a_hash, a_key, a_value, a_result) : std::uint8_t{ 0 };
+		if (inserted) {
+			g_pendingRNAMProviderFile = nullptr;
+		}
 		if (!inserted || !a_key || !a_value ||
 			g_infoTextPhase.load(std::memory_order_acquire) == InfoTextPhase::kDisabled) {
 			return inserted;
@@ -918,7 +946,7 @@ namespace
 	{
 		InfoTextStats stats;
 		if (g_infoTextPhase.load(std::memory_order_acquire) == InfoTextPhase::kDisabled ||
-			!g_rnamInsertOriginal || !g_infoInitOriginal || !g_promptGetter || !g_promptSetter || !g_promptFallback) {
+			(!g_rnamInsertOriginal && !g_rnamInsertOriginalOG) || !g_infoInitOriginal || !g_promptGetter || !g_promptSetter || !g_promptFallback) {
 			a_infoLogLines.emplace_back("INFO text updates unavailable; game dialogue text left unchanged");
 			return stats;
 		}
@@ -991,7 +1019,7 @@ namespace
 				g_startupPendingInfos.clear();
 			}
 			for (const auto formID : deferred) {
-				if (auto* info = RE::TESForm::FindFormByID<RE::TESTopicInfo>(formID)) {
+				if (auto* info = RE::DynamicCast<RE::TESTopicInfo*>(RE::TESForm::FindFormByID(formID))) {
 					UpdateInfo(info, std::addressof(a_infoLogLines));
 				}
 			}
@@ -1018,11 +1046,11 @@ namespace
 		if (trampoline.IsEmpty()) {
 			constexpr std::size_t trampolineSize = 512;
 			const auto api = F4SE::GetTrampolineInterface();
-			auto* memory = static_cast<std::byte*>(api->AllocateFromBranchPool(trampolineSize));
+			auto* memory = api->AllocateFromBranchPool(trampolineSize);
 			if (!memory) {
 				return false;
 			}
-			trampoline.Init(memory, trampolineSize);
+			trampoline.Init(static_cast<std::byte*>(memory), trampolineSize);
 		}
 		return trampoline.GetFreeSize() >= a_required;
 	}
@@ -1035,18 +1063,23 @@ namespace
 		}
 		g_infoEarlyHookAttempted = true;
 		try {
-			const auto load = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::TESTopicInfoLoad }.GetAddress();
-			const auto init = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::TESTopicInfoInitItemImpl }.GetAddress();
-			const auto localizedLoad = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::LocalizedSubrecordLoad }.GetAddress();
-			const auto responseTextLoad = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::TESResponseTextLoad }.GetAddress();
-			const auto fallback = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::DialoguePromptFallback }.GetAddress();
-			const auto getter = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::DialoguePromptGetter }.GetAddress();
-			const auto setter = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::DialoguePromptSetter }.GetAddress();
-			const auto insert = REL::Relocation<std::uintptr_t>{ PCF::EngineIDs::DialoguePromptInsert }.GetAddress();
+			const auto load = PCF::EngineIDs::TESTopicInfoLoad.GetAddress();
+			const auto init = PCF::EngineIDs::TESTopicInfoInitItemImpl.GetAddress();
+			const auto localizedLoad = PCF::EngineIDs::LocalizedSubrecordLoad.GetAddress();
+			const auto responseTextLoad = PCF::EngineIDs::TESResponseTextLoad.GetAddress();
+			const auto fallback = PCF::EngineIDs::DialoguePromptFallback.GetAddress();
+			const auto getter = PCF::EngineIDs::DialoguePromptGetter.GetAddress();
+			const auto setter = PCF::EngineIDs::DialoguePromptSetter.GetAddress();
+			const auto insert = PCF::EngineIDs::DialoguePromptInsert.GetAddress();
+			if (!load || !init || !localizedLoad || !responseTextLoad || !fallback || !getter || !setter || !insert) {
+				return DisableInfoHooks("required relocation ID unavailable");
+			}
 
-			const auto responseLoadCallsite = load + kResponseTextLoadCallOffset;
-			const auto rnamLoadCallsite = load + kRNAMLocalizedLoadCallOffset;
-			const auto captureCallsite = load + kRNAMInsertCallOffset;
+			const auto responseLoadCallsite = load + kResponseTextLoadCallOffset.GetOffset();
+			const auto rnamLoadCallsite = load + kRNAMLocalizedLoadCallOffset.GetOffset();
+			const auto captureCallsite = load + kRNAMInsertCallOffset.GetOffset();
+			const bool isOG = REL::Module::GetSingleton()->GetVersion() == REX::Version(1, 10, 163, 0);
+			const auto captureRetryCallsite = isOG ? load + kRNAMInsertRetryCallOffsetOG : 0;
 			const auto expectedResponseTextLoad = responseTextLoad;
 			const auto expectedLocalizedLoad = localizedLoad;
 			const auto expectedInsert = insert;
@@ -1067,7 +1100,8 @@ namespace
 			if (!validateCall(rnamLoadCallsite, expectedLocalizedLoad)) {
 				return DisableInfoHooks("RNAM localized-load site does not match LocalizedSubrecordLoad");
 			}
-			if (!validateCall(captureCallsite, expectedInsert)) {
+			if (!validateCall(captureCallsite, expectedInsert) ||
+				(isOG && !validateCall(captureRetryCallsite, expectedInsert))) {
 				return DisableInfoHooks("RNAM insertion site does not match DialoguePromptInsert");
 			}
 
@@ -1087,7 +1121,11 @@ namespace
 			g_promptSetter = reinterpret_cast<DialoguePromptSetter>(setter);
 			g_rnamLocalizedLoadOriginal = reinterpret_cast<LocalizedSubrecordLoadFunction>(expectedLocalizedLoad);
 			g_responseTextLoadOriginal = reinterpret_cast<ResponseTextLoadFunction>(expectedResponseTextLoad);
-			g_rnamInsertOriginal = reinterpret_cast<RNAMInsertFunction>(expectedInsert);
+			if (isOG) {
+				g_rnamInsertOriginalOG = reinterpret_cast<RNAMInsertFunctionOG>(expectedInsert);
+			} else {
+				g_rnamInsertOriginal = reinterpret_cast<RNAMInsertFunction>(expectedInsert);
+			}
 			g_infoInitOriginal = reinterpret_cast<InfoInitFunction>(expectedInit);
 
 			auto& trampoline = **REL::GetTrampoline();
@@ -1113,10 +1151,11 @@ namespace
 
 			const auto rnamReplacement = reinterpret_cast<std::uintptr_t>(&RNAMLoadHook);
 			const auto responseReplacement = reinterpret_cast<std::uintptr_t>(&ResponseLoadHook);
-			const auto insertReplacement = reinterpret_cast<std::uintptr_t>(&RNAMInsertHook);
+			const auto insertReplacement = isOG ? reinterpret_cast<std::uintptr_t>(&RNAMInsertHookOG) :
+				reinterpret_cast<std::uintptr_t>(&RNAMInsertHook);
 			const auto initReplacement = reinterpret_cast<std::uintptr_t>(&InfoLoadHook);
 
-			const auto previousRNAMLoad = trampoline.WriteCall<5>(rnamLoadCallsite, reinterpret_cast<std::uintptr_t>(&RNAMLoadHook));
+			const auto previousRNAMLoad = trampoline.WriteCall<5>(rnamLoadCallsite, RNAMLoadHook);
 			if (previousRNAMLoad) {
 				g_rnamLocalizedLoadOriginal = reinterpret_cast<LocalizedSubrecordLoadFunction>(previousRNAMLoad);
 			}
@@ -1126,7 +1165,7 @@ namespace
 				return DisableInfoHooks("RNAM localized-load hook write could not be verified");
 			}
 
-			const auto previousResponseLoad = trampoline.WriteCall<5>(responseLoadCallsite, reinterpret_cast<std::uintptr_t>(&ResponseLoadHook));
+			const auto previousResponseLoad = trampoline.WriteCall<5>(responseLoadCallsite, ResponseLoadHook);
 			if (previousResponseLoad) {
 				g_responseTextLoadOriginal = reinterpret_cast<ResponseTextLoadFunction>(previousResponseLoad);
 			}
@@ -1137,9 +1176,13 @@ namespace
 				return DisableInfoHooks("response-text load hook write could not be verified");
 			}
 
-			const auto previousInsert = trampoline.WriteCall<5>(captureCallsite, reinterpret_cast<std::uintptr_t>(&RNAMInsertHook));
+			const auto previousInsert = trampoline.WriteCall<5>(captureCallsite, insertReplacement);
 			if (previousInsert) {
-				g_rnamInsertOriginal = reinterpret_cast<RNAMInsertFunction>(previousInsert);
+				if (isOG) {
+					g_rnamInsertOriginalOG = reinterpret_cast<RNAMInsertFunctionOG>(previousInsert);
+				} else {
+					g_rnamInsertOriginal = reinterpret_cast<RNAMInsertFunction>(previousInsert);
+				}
 			}
 			if (previousInsert != expectedInsert ||
 				!PCF::NativeHooks::IsRelativeCallTo(captureCallsite, insertReplacement)) {
@@ -1149,13 +1192,29 @@ namespace
 				return DisableInfoHooks("RNAM insertion hook write could not be verified");
 			}
 
-			const auto previousInit = vtable.WriteVirtualCall(kInfoInitVtableSlot, reinterpret_cast<std::uintptr_t>(&InfoLoadHook));
+			std::uintptr_t previousInsertRetry = 0;
+			if (isOG) {
+				previousInsertRetry = trampoline.WriteCall<5>(captureRetryCallsite, insertReplacement);
+				if (previousInsertRetry != expectedInsert ||
+					!PCF::NativeHooks::IsRelativeCallTo(captureRetryCallsite, insertReplacement)) {
+					restoreCallIfOwned(captureRetryCallsite, insertReplacement, previousInsertRetry, "RNAM insertion retry");
+					restoreCallIfOwned(captureCallsite, insertReplacement, previousInsert, "RNAM insertion");
+					restoreCallIfOwned(responseLoadCallsite, responseReplacement, previousResponseLoad, "response-text load");
+					restoreCallIfOwned(rnamLoadCallsite, rnamReplacement, previousRNAMLoad, "RNAM localized-load");
+					return DisableInfoHooks("RNAM insertion retry hook write could not be verified");
+				}
+			}
+
+			const auto previousInit = vtable.WriteVirtualCall(kInfoInitVtableSlot, InfoLoadHook);
 			if (previousInit) {
 				g_infoInitOriginal = reinterpret_cast<InfoInitFunction>(previousInit);
 			}
 			if (previousInit != expectedInit ||
 				!PCF::NativeHooks::IsVtableSlotSet(vtableAddress, kInfoInitVtableSlot, initReplacement)) {
 				restoreInitIfOwned(initReplacement, previousInit);
+				if (isOG) {
+					restoreCallIfOwned(captureRetryCallsite, insertReplacement, previousInsertRetry, "RNAM insertion retry");
+				}
 				restoreCallIfOwned(captureCallsite, insertReplacement, previousInsert, "RNAM insertion");
 				restoreCallIfOwned(responseLoadCallsite, responseReplacement, previousResponseLoad, "response-text load");
 				restoreCallIfOwned(rnamLoadCallsite, rnamReplacement, previousRNAMLoad, "RNAM localized-load");

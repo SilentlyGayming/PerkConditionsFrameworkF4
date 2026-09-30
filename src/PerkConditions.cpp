@@ -11,9 +11,9 @@
 
 namespace
 {
-	using ConditionFunction = decltype(RE::SCRIPT_FUNCTION::conditionFunction);
-	ConditionFunction g_hasPerk{ nullptr };
-	ConditionFunction g_dialogueHasPerk{ nullptr };
+	using ConditionFunction = RE::SCRIPT_FUNCTION::ConditionFunctionType;
+	ConditionFunction* g_hasPerk{ nullptr };
+	ConditionFunction* g_dialogueHasPerk{ nullptr };
 	bool g_installed{ false };
 	// Checks a numeric condition.
 	bool CheckBoolean(float a_value, RE::ENUM_COMPARISON_CONDITION a_condition, float a_compare)
@@ -43,7 +43,7 @@ namespace
 		return reference ? reference->As<RE::Actor>() : nullptr;
 	}
 	// Checks one configured replacement requirement.
-	bool MeetsAlternative(ConditionFunction a_original, RE::ConditionCheckParams a_params,
+	bool MeetsAlternative(ConditionFunction* a_original, RE::ConditionCheckParams a_params,
 		void* a_param1, const PCF::PerkAlternative& a_alternative,
 		RE::Actor*& a_actor, bool& a_actorChecked)
 	{
@@ -92,7 +92,7 @@ namespace
 		return currentActor && a_alternative.perk && currentActor->GetPerkRank(a_alternative.perk) >= a_alternative.rank;
 	}
 	// Combines the game perk result with the configured rule.
-	bool Evaluate(ConditionFunction a_original, RE::ConditionCheckParams& a_params,
+	bool Evaluate(ConditionFunction* a_original, RE::ConditionCheckParams& a_params,
 		void* a_perk, void* a_param1, float& a_value)
 	{
 		if (!a_original) {
@@ -149,8 +149,10 @@ namespace PCF::PerkConditions
 			return nullptr;
 		}
 		const auto function = static_cast<std::uint32_t>(a_item->data.functionData.function.get());
-		const auto hasPerk = std::uint32_t{ 448 };
-		const auto dialogueHasPerk = std::uint32_t{ 507 };
+		const auto hasPerk = static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::kScript_HasPerk) +
+			static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::kScript_Offset);
+		const auto dialogueHasPerk = static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::kScript_DialogueHasPerk) +
+			static_cast<std::uint32_t>(RE::SCRIPT_OUTPUT::kScript_Offset);
 		if (function != hasPerk && function != hasPerk - 0x1000 &&
 			function != dialogueHasPerk && function != dialogueHasPerk - 0x1000) {
 			return nullptr;
@@ -185,7 +187,7 @@ namespace PCF::PerkConditions
 			if (!resolved || resolved.kind == PCF::PerkRankType::kInternal) {
 				break;
 			}
-			if (a_player->GetPerkRank(resolved.perk) > 0) {
+			if (a_player->GetPerkRank(resolved.perk) != 0) {
 				highest = rank;
 			}
 		}

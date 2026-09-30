@@ -27,7 +27,7 @@ namespace PCF::UIHookState
 
 	struct MenuHook
 	{
-		const REL::IId* vtableID;
+		REL::Id<> vtableID;
 		std::string_view name;
 		CallFunction call{ nullptr };
 		ProcessMessageFunction processMessage{ nullptr };
@@ -38,11 +38,11 @@ namespace PCF::UIHookState
 	};
 
 	inline std::array<MenuHook, kMenuCount> g_hooks{{
-		{ &RE::VTABLE::ExamineMenu[0], "ExamineMenu" },
-		{ &RE::VTABLE::CookingMenu[0], "CookingMenu" },
-		{ &RE::VTABLE::PowerArmorModMenu[0], "PowerArmorModMenu" },
-		{ &RE::VTABLE::RobotModMenu[0], "RobotModMenu" },
-		{ &RE::VTABLE::WorkshopMenu[0], "WorkshopMenu" }
+		{ RE::VTABLE::ExamineMenu[0], "ExamineMenu" },
+		{ RE::VTABLE::CookingMenu[0], "CookingMenu" },
+		{ RE::VTABLE::PowerArmorModMenu[0], "PowerArmorModMenu" },
+		{ RE::VTABLE::RobotModMenu[0], "RobotModMenu" },
+		{ RE::VTABLE::WorkshopMenu[0], "WorkshopMenu" }
 	}};
 
 	// Returns the shared UI hook table.

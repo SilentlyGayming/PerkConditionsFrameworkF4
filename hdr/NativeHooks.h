@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "F4SE/Runtimes.hpp"
 #include "REL/Relocation.hpp"
 
 #ifdef _MSC_VER
@@ -21,6 +22,7 @@
 #include <limits>
 #include <memory>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace PCF::NativeHooks
@@ -164,5 +166,92 @@ namespace PCF::NativeHooks
 	inline bool IsVtableSlotSet(std::uintptr_t a_vtable, std::size_t a_slot, std::uintptr_t a_expected)
 	{
 		return a_expected != 0 && ReadVtableSlot(a_vtable, a_slot) == a_expected;
+	}
+}
+
+namespace PCF::EngineIDs
+{
+	inline constexpr F4SE::VariantId BGSMessageGetConvertedDescription{ 8331, 2203353, 2203353 };
+	inline constexpr F4SE::VariantId TESDescriptionGetDescription{ 523613, 2193019, 2193019 };
+	inline constexpr F4SE::VariantId PipboyPerksMenuUpdateData{ 783380, 2224224, 2224224 };
+	inline constexpr F4SE::VariantId TESTopicInfoLoad{ 918452, 2208420, 2208420 };
+	inline constexpr F4SE::VariantId TESTopicInfoInitItemImpl{ 1153916, 2208421, 2208421 };
+	inline constexpr F4SE::VariantId LocalizedSubrecordLoad{ 952518, 2194235, 2194235 };
+	inline constexpr F4SE::VariantId TESResponseTextLoad{ 142679, 2208286, 2208286 };
+	inline constexpr F4SE::VariantId DialoguePromptFallback{ 163538, 2208435, 2208435 };
+	inline constexpr F4SE::VariantId DialoguePromptGetter{ 1435199, 2208446, 2208446 };
+	inline constexpr F4SE::VariantId DialoguePromptSetter{ 105445, 2208447, 2208447 };
+	inline constexpr F4SE::VariantId DialoguePromptInsert{ 807487, 2208487, 2208487 };
+	inline constexpr F4SE::VariantId WorkshopPublishRequirements{ 931840, 2225003, 2225003 };
+	inline constexpr F4SE::VariantId WorkshopAppendPerkRow{ 1150661, 2225058, 2225058 };
+	inline constexpr F4SE::VariantId TESConditionIsTrue{ 1275731, 2211989, 2211989 };
+	inline constexpr F4SE::VariantId TESConditionIsTrueContext{ 743921, 2211990, 2211990 };
+	inline constexpr F4SE::VariantId TESConditionIsTrueForAllButFunction{ 1182457, 2211991, 2211991 };
+	inline constexpr F4SE::VariantId WorkbenchChoiceRequirements{ 1484640, 2223051, 2223051 };
+	inline constexpr F4SE::VariantId GFxSetMember{ 1360149, 2286589, 2286589 };
+}
+
+namespace PCF::PRKFCompatibility
+{
+	struct Build
+	{
+		std::string_view name;
+		std::array<std::uint16_t, 4> runtime;
+		std::uint32_t timestamp;
+		std::uint32_t imageSize;
+		std::uintptr_t requirementsRVA;
+		std::uintptr_t stringAssignRVA;
+		std::uintptr_t reqsFieldOffset;
+		std::array<std::uint8_t, 14> requirementsPrologue;
+		std::array<std::uint8_t, 4> reqsField;
+		std::array<std::uint8_t, 5> assignPrologue;
+		std::uintptr_t descriptionRVA;
+		std::uintptr_t descriptionFormArgRVA;
+		std::array<std::uint8_t, 14> descriptionResolver;
+		std::array<std::uint8_t, 15> descriptionHelperPrologue;
+	};
+
+	inline constexpr std::array<Build, 3> kBuilds{{
+		{
+			"OG 1.10.163.0", { 1, 10, 163, 0 }, 0x5DE9515B, 0x82000,
+			0x14160, 0x7D40, 0x4D,
+			{ 0x48, 0x8B, 0xC4, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57 },
+			{ 0x4C, 0x8D, 0x71, 0x10 },
+			{ 0x48, 0x89, 0x5C, 0x24, 0x08 },
+			0x8340, 0x0,
+			{},
+			{ 0x40, 0x57, 0x48, 0x83, 0xEC, 0x50, 0x48, 0xC7, 0x44, 0x24, 0x30, 0xFE, 0xFF, 0xFF, 0xFF }
+		},
+		{
+			"NG 1.10.984.0", { 1, 10, 984, 0 }, 0x66475DEA, 0x7C000,
+			0x11C40, 0x73D0, 0x4C,
+			{ 0x48, 0x89, 0x5C, 0x24, 0x18, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56 },
+			{ 0x4C, 0x8D, 0x61, 0x10 },
+			{ 0x48, 0x89, 0x5C, 0x24, 0x10 },
+			0x12B86, 0x12B9B,
+			{ 0x4C, 0x8B, 0x0D, 0xD3, 0xEA, 0x05, 0x00, 0x49, 0x81, 0xC1, 0x30, 0xA2, 0x2B, 0x00 },
+			{}
+		},
+		{
+			"AE 1.11.240.0", { 1, 11, 240, 0 }, 0x6A9D7778, 0x7C000,
+			0x13DF0, 0x79A0, 0x4E,
+			{ 0x48, 0x89, 0x5C, 0x24, 0x18, 0x55, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56 },
+			{ 0x4C, 0x8D, 0x71, 0x10 },
+			{ 0x48, 0x89, 0x5C, 0x24, 0x10 },
+			0x14D34, 0x14D49,
+			{ 0x4C, 0x8B, 0x0D, 0x35, 0xC8, 0x05, 0x00, 0x49, 0x81, 0xC1, 0x10, 0xEA, 0x30, 0x00 },
+			{}
+		},
+	}};
+
+	// Selects only a PRKF image whose patch sites were verified from its released DLL.
+	[[nodiscard]] inline const Build* FindBuild(std::uint32_t a_timestamp, std::uint32_t a_imageSize) noexcept
+	{
+		for (const auto& build : kBuilds) {
+			if (build.timestamp == a_timestamp && build.imageSize == a_imageSize) {
+				return &build;
+			}
+		}
+		return nullptr;
 	}
 }

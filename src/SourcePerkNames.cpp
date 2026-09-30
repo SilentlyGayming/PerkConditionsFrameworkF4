@@ -397,7 +397,7 @@ namespace
 	public:
 		// Opens a plugin or STRINGS file through Fallout resource I/O.
 		explicit ResourceByteReader(const std::string& a_path) :
-			_stream(std::make_unique<RE::BSResourceNiBinaryStream>(a_path))
+			_stream(std::make_unique<RE::BSResourceNiBinaryStream>(a_path.c_str()))
 		{
 			if (_stream && static_cast<bool>(*_stream) && _stream->stream) {
 				_size = _stream->stream->totalSize;
@@ -437,7 +437,7 @@ namespace
 				}
 			}
 
-			return _stream->read(static_cast<char*>(a_buffer), static_cast<std::uint32_t>(a_size));
+			return _stream->BinaryRead(static_cast<std::byte*>(a_buffer), a_size) == a_size;
 		}
 
 	private:

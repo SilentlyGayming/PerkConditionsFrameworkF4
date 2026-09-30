@@ -38,18 +38,6 @@ project(
 	LANGUAGES CXX
 )
 
-set(PROJECT_VERSION_TWEAK 0)
-
-set(COMMONLIB_PLUGIN_NAME "PerkConditionsFramework")
-set(COMMONLIB_PLUGIN_AUTHOR "SilentlyGayming")
-set(COMMONLIB_PLUGIN_LICENSE "MIT License")
-set(COMMONLIB_PLUGIN_DESCRIPTION "Perk Conditions Framework")
-
-set(COMMONLIB_RUNTIME_VR OFF CACHE BOOL "" FORCE)
-set(COMMONLIB_RUNTIME_OG OFF CACHE BOOL "" FORCE)
-set(COMMONLIB_RUNTIME_NG ON CACHE BOOL "" FORCE)
-set(COMMONLIB_RUNTIME_AE ON CACHE BOOL "" FORCE)
-
 if (NOT WIN32 OR NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 	message(FATAL_ERROR "The Fallout 4 DLL requires Windows x64 and the MSVC toolchain.")
 endif ()
@@ -94,7 +82,7 @@ if (NOT DEFINED CommonLibF4Path)
 	message(FATAL_ERROR "CommonLibF4Path is not set.")
 endif ()
 
-if (NOT EXISTS "${CommonLibF4Path}/CMakeLists.txt")
+if (NOT EXISTS "${CommonLibF4Path}/CMakeLists.txt" OR NOT EXISTS "${CommonLibF4Path}/include/REL/Relocation.hpp")
 	message(FATAL_ERROR "CommonLibF4 AV was not found at: ${CommonLibF4Path}")
 endif ()
 
@@ -106,16 +94,18 @@ if (NOT EXISTS "${TOMLPLUSPLUS_PATH}/toml.hpp")
 	message(FATAL_ERROR "toml.hpp was not found at: ${TOMLPLUSPLUS_PATH}")
 endif ()
 
-include("${CommonLibF4Path}/cmake/GenerateXsePluginInfo.cmake")
-generate_xse_plugin_info("${CommonLibF4Path}")
-
 if (NOT TARGET CommonLibF4)
+	set(COMMONLIB_RUNTIME_OG ON CACHE BOOL "" FORCE)
+	set(COMMONLIB_RUNTIME_NG ON CACHE BOOL "" FORCE)
+	set(COMMONLIB_RUNTIME_AE ON CACHE BOOL "" FORCE)
+	set(COMMONLIB_RUNTIME_VR OFF CACHE BOOL "" FORCE)
 	add_subdirectory("${CommonLibF4Path}" CommonLibF4)
 endif ()
 
 find_package(fmt REQUIRED CONFIG)
 find_package(spdlog REQUIRED CONFIG)
 find_package(ZLIB REQUIRED)
+find_package(zydis REQUIRED CONFIG)
 
 # ---- Add source files ----
 
@@ -137,7 +127,6 @@ add_library(
 	${PROJECT_NAME}
 	SHARED
 	${SOURCES}
-	${XSE_PLUGIN_INFO_CPP_TARGET}
 	${CMAKE_CURRENT_BINARY_DIR}/version.rc
 	.clang-format
 )
@@ -158,8 +147,12 @@ target_include_directories(
 	${PROJECT_NAME}
 	PRIVATE
 		${CMAKE_CURRENT_BINARY_DIR}/hdr
-		${CMAKE_CURRENT_BINARY_DIR}/include
 		${CMAKE_CURRENT_SOURCE_DIR}/hdr
+)
+
+target_include_directories(
+	${PROJECT_NAME}
+	SYSTEM PRIVATE
 		${TOMLPLUSPLUS_PATH}
 )
 
@@ -170,6 +163,7 @@ target_link_libraries(
 		fmt::fmt
 		spdlog::spdlog
 		ZLIB::ZLIB
+		Zydis::Zydis
 )
 
 target_precompile_headers(
@@ -189,7 +183,6 @@ target_compile_options(
 		/Zc:preprocessor	# Enable preprocessor conformance mode
 
 		/W4	# Warning level
-		/wd5311
 		/WX	# Warning level (warnings are errors)
 
 		"$<$<CONFIG:RELEASE>:/Zc:inline;/JMC->"

@@ -40,7 +40,11 @@ namespace PCF::UIManager
 		auto& hooks = PCF::UIHookState::GetHooks();
 		for (std::size_t i = 0; i < hooks.size(); ++i) {
 			auto& hook = hooks[i];
-			vtables[i] = REL::Relocation<std::uintptr_t>{ *hook.vtableID }.GetAddress();
+			const auto resolved = hook.vtableID.GetAddress();
+			if (!resolved) {
+				return fail(fmt::format("{} vtable: {}", hook.name, "Address Library ID unavailable"));
+			}
+			vtables[i] = resolved;
 			const auto* table = reinterpret_cast<const std::uintptr_t*>(vtables[i]);
 			if (i == kWorkshopIndex) {
 				if (!table[kCallSlot] || !table[kProcessMessageSlot] || !table[kAdvanceSlot] || !table[kPreDisplaySlot]) {
@@ -56,8 +60,11 @@ namespace PCF::UIManager
 			}
 		}
 
-		const auto inputVtable =
-			REL::Relocation<std::uintptr_t>{ RE::VTABLE::WorkshopMenu[1] }.GetAddress();
+		const auto inputLookup = RE::VTABLE::WorkshopMenu[1].GetAddress();
+		if (!inputLookup) {
+			return fail(fmt::format("WorkshopMenu input vtable: {}", "Address Library ID unavailable"));
+		}
+		const auto inputVtable = inputLookup;
 		const auto* inputTable = reinterpret_cast<const std::uintptr_t*>(inputVtable);
 		if (!inputTable[kButtonEventSlot]) {
 			return fail("WorkshopMenu ButtonEvent callback");

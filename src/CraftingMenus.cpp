@@ -289,14 +289,14 @@ namespace
 	// Gets the selected crafting requirement rows.
 	bool GetSelectedRows(RE::IMenu* a_menu, std::uint32_t& a_selected, Value& a_rows)
 	{
-		if (!a_menu || !a_menu->menuObj.IsObject()) {
+		if (!a_menu || !a_menu->menuObj.IsAnyObject()) {
 			return false;
 		}
 		Value list;
 		Value entries;
 		Value entry;
 		std::uint32_t count = 0;
-		if (!a_menu->menuObj.GetMember("ModListObject", &list) || !list.IsObject() ||
+		if (!a_menu->menuObj.GetMember("ModListObject", &list) || !list.IsAnyObject() ||
 			!list.GetMember("entryList", &entries) || !entries.IsArray() || !ReadIndex(entries, "length", count) ||
 			!ReadIndex(list, "selectedIndex", a_selected) || a_selected >= count ||
 			!ReadElement(entries, a_selected, entry) || !entry.GetMember("perkData", &a_rows) || !a_rows.IsArray()) {
@@ -308,10 +308,10 @@ namespace
 	bool BuildArtworkPlan(RE::IMenu* a_menu, ArtworkPlan& a_plan)
 	{
 		a_plan = {};
-		auto* workbench = static_cast<RE::WorkbenchMenuBase*>(a_menu);
+		auto* workbench = RE::DynamicCast<RE::WorkbenchMenuBase*>(a_menu);
 		Value list;
-		if (!workbench || !a_menu || !a_menu->menuObj.IsObject() ||
-			!a_menu->menuObj.GetMember("ModListObject", &list) || !list.IsObject() ||
+		if (!workbench || !a_menu || !a_menu->menuObj.IsAnyObject() ||
+			!a_menu->menuObj.GetMember("ModListObject", &list) || !list.IsAnyObject() ||
 			!ReadIndex(list, "selectedIndex", a_plan.selectedIndex) ||
 			static_cast<std::size_t>(a_plan.selectedIndex) >= static_cast<std::size_t>(workbench->modChoiceArray.size())) {
 			return false;
@@ -365,11 +365,11 @@ namespace
 	// Checks whether the artwork still matches the current selection.
 	bool ArtworkMatchesSelection(RE::IMenu* a_menu, const ArtworkPlan& a_plan)
 	{
-		auto* workbench = static_cast<RE::WorkbenchMenuBase*>(a_menu);
+		auto* workbench = RE::DynamicCast<RE::WorkbenchMenuBase*>(a_menu);
 		Value list;
 		std::uint32_t selected = 0;
-		if (!workbench || !a_menu || !a_menu->menuObj.IsObject() ||
-			!a_menu->menuObj.GetMember("ModListObject", &list) || !list.IsObject() ||
+		if (!workbench || !a_menu || !a_menu->menuObj.IsAnyObject() ||
+			!a_menu->menuObj.GetMember("ModListObject", &list) || !list.IsAnyObject() ||
 			!ReadIndex(list, "selectedIndex", selected) || selected != a_plan.selectedIndex ||
 			static_cast<std::size_t>(selected) >= static_cast<std::size_t>(workbench->modChoiceArray.size())) {
 			return false;
@@ -400,15 +400,15 @@ namespace
 	// Finds the ExamineMenu panel for a requirement slot.
 	bool GetExaminePanel(RE::IMenu* a_menu, std::uint32_t a_index, Value& a_panel)
 	{
-		if (!a_menu || !a_menu->menuObj.IsObject() || a_index >= kRequirementSlots) {
+		if (!a_menu || !a_menu->menuObj.IsAnyObject() || a_index >= kRequirementSlots) {
 			return false;
 		}
 		const auto name = kPerkPanelNames[a_index];
-		if (a_menu->menuObj.GetMember(name.data(), &a_panel) && a_panel.IsObject()) {
+		if (a_menu->menuObj.GetMember(name.data(), &a_panel) && a_panel.IsAnyObject()) {
 			return true;
 		}
 		const Value argument(name.data());
-		return a_menu->menuObj.Invoke("getChildByName", &a_panel, &argument, 1) && a_panel.IsObject();
+		return a_menu->menuObj.Invoke("getChildByName", &a_panel, &argument, 1) && a_panel.IsAnyObject();
 	}
 	// Marks every artwork slot as inactive.
 	void ResetArtworkSlots(ArtworkPlan& a_plan)
@@ -425,9 +425,9 @@ namespace
 			return true;
 		}
 		Value format;
-		const bool hasFormat = a_nameField.IsObject() && a_nameField.Invoke("getTextFormat", &format, nullptr, 0) &&
-			format.IsObject();
-		if (!a_nameField.IsObject() || !a_nameField.SetMember("text", Value(a_name.c_str()))) {
+		const bool hasFormat = a_nameField.IsAnyObject() && a_nameField.Invoke("getTextFormat", &format, nullptr, 0) &&
+			format.IsAnyObject();
+		if (!a_nameField.IsAnyObject() || !a_nameField.SetMember("text", Value(a_name.c_str()))) {
 			return false;
 		}
 		if (hasFormat) {
@@ -438,14 +438,14 @@ namespace
 	// Finds a crafting requirement panel by name.
 	bool FindPanelByName(RE::IMenu* a_menu, std::string_view a_name, Value& a_panel)
 	{
-		if (!a_menu || !a_menu->menuObj.IsObject()) {
+		if (!a_menu || !a_menu->menuObj.IsAnyObject()) {
 			return false;
 		}
-		if (a_menu->menuObj.GetMember(a_name.data(), &a_panel) && a_panel.IsObject()) {
+		if (a_menu->menuObj.GetMember(a_name.data(), &a_panel) && a_panel.IsAnyObject()) {
 			return true;
 		}
 		const Value argument(a_name.data());
-		return a_menu->menuObj.Invoke("getChildByName", &a_panel, &argument, 1) && a_panel.IsObject();
+		return a_menu->menuObj.Invoke("getChildByName", &a_panel, &argument, 1) && a_panel.IsAnyObject();
 	}
 	// Finds the panels used by a crafting slot.
 	std::size_t FindPanelsForSlot(RE::IMenu* a_menu, std::size_t a_menuIndex,
@@ -476,8 +476,8 @@ namespace
 	{
 		Value nameField;
 		std::string panelName;
-		return a_panel.IsObject() &&
-			a_panel.GetMember("PerkName_tf", &nameField) && nameField.IsObject() &&
+		return a_panel.IsAnyObject() &&
+			a_panel.GetMember("PerkName_tf", &nameField) && nameField.IsAnyObject() &&
 			ReadText(nameField, "text", panelName) && panelName == a_rowName;
 	}
 	// Prepares crafting artwork before the game updates the menu.
@@ -510,7 +510,7 @@ namespace
 				const auto panelCount = FindPanelsForSlot(a_menu, a_menuIndex, slot.index, panels);
 				for (std::size_t panelIndex = 0; panelIndex < panelCount; ++panelIndex) {
 					Value nameField;
-					if (panels[panelIndex].GetMember("PerkName_tf", &nameField) && nameField.IsObject() &&
+					if (panels[panelIndex].GetMember("PerkName_tf", &nameField) && nameField.IsAnyObject() &&
 						SetPanelName(nameField, rowName)) {
 						ready = true;
 					}
@@ -598,7 +598,7 @@ namespace
 			std::string rowName;
 			const bool ready = ReadElement(rows, slot.index, row) && ReadText(row, "perkName", rowName) &&
 				GetExaminePanel(a_menu, slot.index, panel) &&
-				panel.GetMember("PerkName_tf", &nameField) && nameField.IsObject() &&
+				panel.GetMember("PerkName_tf", &nameField) && nameField.IsAnyObject() &&
 				SetPanelName(nameField, rowName);
 			if (a_initial) {
 				slot.originalRowName = ready ? rowName : std::string{};
@@ -643,7 +643,7 @@ namespace
 	// Updates one requirement row with PCF text and lock state.
 	bool UpdateRow(Value& a_row, RE::BGSPerk* a_source, const PCF::PerkRule* a_rule)
 	{
-		if (!a_rule || !a_source || !a_row.IsObject()) {
+		if (!a_rule || !a_source || !a_row.IsAnyObject()) {
 			return false;
 		}
 		const auto* presentation = PCF::TextManager::GetConfiguredRequirement(a_source);
@@ -658,7 +658,7 @@ namespace
 	// Replaces one crafting entry's native requirement rows with PCF-owned custom rows.
 	bool UpdateCustomEntry(Value& a_entry, RE::IMenu* a_menu, const PCF::CustomConditions::ConditionSet& a_set)
 	{
-		if (!a_menu || !a_menu->uiMovie || !a_entry.IsObject()) {
+		if (!a_menu || !a_menu->uiMovie || !a_entry.IsAnyObject()) {
 			return false;
 		}
 		Value rows;
@@ -674,7 +674,7 @@ namespace
 			Value row;
 			a_menu->uiMovie->CreateObject(&row);
 			auto* form = PCF::CustomConditions::GetDisplayForm(condition);
-			if (!row.IsObject() || !form ||
+			if (!row.IsAnyObject() || !form ||
 				!row.SetMember("visible", Value(true)) ||
 				!row.SetMember("perkName", Value(condition.presentation.rowLabel.c_str())) ||
 				!row.SetMember("perkID", Value(static_cast<double>(form->GetFormID()))) ||
@@ -697,7 +697,7 @@ namespace
 		const RE::WorkbenchMenuBase::ModChoiceData& a_choice)
 	{
 		Value entry;
-		if (!ReadElement(a_entries, a_entryIndex, entry) || !entry.IsObject()) {
+		if (!ReadElement(a_entries, a_entryIndex, entry) || !entry.IsAnyObject()) {
 			return false;
 		}
 		if (a_choice.recipe) {
@@ -732,18 +732,18 @@ namespace
 	// Applies one player-facing PCF-owned custom requirement after the menu rebuilds its panels.
 	bool ApplyCustomRequirementPanel(Value& a_panel, const PCF::CustomConditions::Condition& a_condition)
 	{
-		if (!a_panel.IsObject() || !PCF::CustomConditions::IsPlayerFacing(a_condition)) {
+		if (!a_panel.IsAnyObject() || !PCF::CustomConditions::IsPlayerFacing(a_condition)) {
 			return false;
 		}
 		bool changed = SetBool(a_panel, "visible", true);
 		Value nameField;
 		Value requirementField;
 		Value lock;
-		if (a_panel.GetMember("PerkName_tf", &nameField) && nameField.IsObject()) {
+		if (a_panel.GetMember("PerkName_tf", &nameField) && nameField.IsAnyObject()) {
 			changed = SetBool(nameField, "visible", true) || changed;
 			changed = SetPanelName(nameField, a_condition.presentation.rowLabel) || changed;
 		}
-		if (a_panel.GetMember("Requires_tf", &requirementField) && requirementField.IsObject()) {
+		if (a_panel.GetMember("Requires_tf", &requirementField) && requirementField.IsAnyObject()) {
 			changed = SetBool(requirementField, "visible", true) || changed;
 			std::string existing;
 			std::string prefix;
@@ -768,7 +768,7 @@ namespace
 			text.append(a_condition.presentation.valueText);
 			changed = SetText(requirementField, "text", text) || changed;
 		}
-		if (a_panel.GetMember("PerkLock_mc", &lock) && lock.IsObject()) {
+		if (a_panel.GetMember("PerkLock_mc", &lock) && lock.IsAnyObject()) {
 			changed = SetBool(lock, "visible", !PCF::CustomConditions::Evaluate(a_condition)) || changed;
 		}
 		return changed;
@@ -780,13 +780,13 @@ namespace
 	// stale text/artwork from a hidden quest condition on screen.
 	bool ClearCustomRequirementPanel(Value& a_panel)
 	{
-		if (!a_panel.IsObject()) {
+		if (!a_panel.IsAnyObject()) {
 			return false;
 		}
 		bool changed = SetBool(a_panel, "visible", false);
 		for (const auto* member : { "PerkName_tf", "Requires_tf", "PerkLock_mc", "PerkLoaderClip_mc" }) {
 			Value child;
-			if (!a_panel.GetMember(member, &child) || !child.IsObject()) {
+			if (!a_panel.GetMember(member, &child) || !child.IsAnyObject()) {
 				continue;
 			}
 			changed = SetBool(child, "visible", false) || changed;
@@ -849,13 +849,13 @@ namespace
 		if (!a_menu) {
 			return nullptr;
 		}
-		auto* workbench = static_cast<RE::WorkbenchMenuBase*>(a_menu);
-		if (!workbench || !a_menu->menuObj.IsObject()) {
+		auto* workbench = RE::DynamicCast<RE::WorkbenchMenuBase*>(a_menu);
+		if (!workbench || !a_menu->menuObj.IsAnyObject()) {
 			return nullptr;
 		}
 		Value list;
 		std::uint32_t selected = 0;
-		if (!a_menu->menuObj.GetMember("ModListObject", &list) || !list.IsObject() ||
+		if (!a_menu->menuObj.GetMember("ModListObject", &list) || !list.IsAnyObject() ||
 			!ReadIndex(list, "selectedIndex", selected) ||
 			static_cast<std::size_t>(selected) >= static_cast<std::size_t>(workbench->modChoiceArray.size())) {
 			return nullptr;
@@ -886,14 +886,14 @@ namespace
 	bool UpdateCraftingRows(RE::IMenu* a_menu, ArtworkPlan* a_artworkPlan = nullptr,
 		std::size_t a_artworkMenuIndex = kExamineIndex)
 	{
-		auto* workbench = static_cast<RE::WorkbenchMenuBase*>(a_menu);
-		if (!workbench || !a_menu->menuObj.IsObject()) {
+		auto* workbench = RE::DynamicCast<RE::WorkbenchMenuBase*>(a_menu);
+		if (!workbench || !a_menu->menuObj.IsAnyObject()) {
 			return false;
 		}
 		Value list;
 		Value entries;
 		std::uint32_t count = 0;
-		if (!a_menu->menuObj.GetMember("ModListObject", &list) || !list.IsObject() ||
+		if (!a_menu->menuObj.GetMember("ModListObject", &list) || !list.IsAnyObject() ||
 			!list.GetMember("entryList", &entries) || !entries.IsArray() || !ReadIndex(entries, "length", count)) {
 			return false;
 		}
@@ -947,16 +947,16 @@ namespace
 	// Finds the artwork loader inside a requirement panel.
 	bool FindLoader(Value& a_panel, Value& a_loader)
 	{
-		if (!a_panel.IsObject()) {
+		if (!a_panel.IsAnyObject()) {
 			return false;
 		}
-		if (a_panel.GetMember("PerkLoaderClip_mc", &a_loader) && a_loader.IsObject()) {
+		if (a_panel.GetMember("PerkLoaderClip_mc", &a_loader) && a_loader.IsAnyObject()) {
 			return true;
 		}
 		Value nameField;
 		Value requirementField;
-		if (!a_panel.GetMember("PerkName_tf", &nameField) || !nameField.IsObject() ||
-			!a_panel.GetMember("Requires_tf", &requirementField) || !requirementField.IsObject()) {
+		if (!a_panel.GetMember("PerkName_tf", &nameField) || !nameField.IsAnyObject() ||
+			!a_panel.GetMember("Requires_tf", &requirementField) || !requirementField.IsAnyObject()) {
 			return false;
 		}
 		std::uint32_t childCount = 0;
@@ -967,11 +967,11 @@ namespace
 		for (std::uint32_t i = 0; i < childrenToVisit; ++i) {
 			Value child;
 			const Value argument(static_cast<double>(i));
-			if (!a_panel.Invoke("getChildAt", &child, &argument, 1) || !child.IsObject()) {
+			if (!a_panel.Invoke("getChildAt", &child, &argument, 1) || !child.IsAnyObject()) {
 				continue;
 			}
 			Value load;
-			if (child.GetMember("SWFLoad", &load) && (load.GetType() == Value::ValueType::kClosure || load.IsObject())) {
+			if (child.GetMember("SWFLoad", &load) && (load.GetType() == Value::ValueType::kClosure || load.IsAnyObject())) {
 				a_loader = child;
 				return true;
 			}
@@ -1049,7 +1049,7 @@ namespace
 			SetBool(loader, "visible", true);
 			presented = true;
 		}
-		if (presented && a_menu && a_menu->menuObj.IsObject()) {
+		if (presented && a_menu && a_menu->menuObj.IsAnyObject()) {
 			a_menu->menuObj.SetMember("__PCFPanelScanStable", Value(false));
 		}
 	}
@@ -1172,7 +1172,7 @@ namespace
 			SetBool(loader, "visible", true);
 			presented = true;
 		}
-		if (presented && a_menu && a_menu->menuObj.IsObject()) {
+		if (presented && a_menu && a_menu->menuObj.IsAnyObject()) {
 			a_menu->menuObj.SetMember("__PCFPanelScanStable", Value(false));
 		}
 	}
@@ -1190,7 +1190,7 @@ namespace
 	// Searches the menu and hides the game's artwork.
 	void HideArtworkInMenu(Value& a_root, ArtworkSearchResult& a_stats)
 	{
-		if (!a_root.IsObject()) {
+		if (!a_root.IsAnyObject()) {
 			return;
 		}
 
@@ -1207,7 +1207,7 @@ namespace
 			}
 
 			auto node = std::move(queue[cursor++]);
-			if (!node.object.IsObject()) {
+			if (!node.object.IsAnyObject()) {
 				continue;
 			}
 			++visited;
@@ -1232,7 +1232,7 @@ namespace
 				}
 				Value child;
 				const Value argument(static_cast<double>(i));
-				if (!node.object.Invoke("getChildAt", &child, &argument, 1) || !child.IsObject()) {
+				if (!node.object.Invoke("getChildAt", &child, &argument, 1) || !child.IsAnyObject()) {
 					continue;
 				}
 				queue.push_back({ std::move(child), node.depth + 1 });
@@ -1246,7 +1246,7 @@ namespace
 	// Hides original artwork while PCF shows custom requirements.
 	void HideOriginalArtwork(RE::IMenu* a_menu, bool a_cache)
 	{
-		if (!a_menu || !a_menu->menuObj.IsObject()) {
+		if (!a_menu || !a_menu->menuObj.IsAnyObject()) {
 			return;
 		}
 		ArtworkSearchResult stats;
@@ -1393,7 +1393,7 @@ namespace
 			return false;
 		}
 		REL::Relocation<std::uintptr_t> vtable{ a_vtable };
-		const auto previous = vtable.WriteVirtualCall(kCallSlot, reinterpret_cast<std::uintptr_t>(&CraftingMenuCallHook<Index>));
+		const auto previous = vtable.WriteVirtualCall(kCallSlot, CraftingMenuCallHook<Index>);
 		hook.call = reinterpret_cast<CallFunction>(previous);
 		return hook.call != nullptr && PCF::NativeHooks::IsVtableSlotSet(a_vtable, kCallSlot, replacement);
 	}
@@ -1411,7 +1411,7 @@ namespace
 			return false;
 		}
 		REL::Relocation<std::uintptr_t> vtable{ a_vtable };
-		const auto previous = vtable.WriteVirtualCall(kPreDisplaySlot, reinterpret_cast<std::uintptr_t>(&CookingPreDisplayHook));
+		const auto previous = vtable.WriteVirtualCall(kPreDisplaySlot, CookingPreDisplayHook);
 		hook.preDisplay = reinterpret_cast<PCF::UIHookState::PreDisplayFunction>(previous);
 		return hook.preDisplay != nullptr &&
 			PCF::NativeHooks::IsVtableSlotSet(a_vtable, kPreDisplaySlot, replacement);
