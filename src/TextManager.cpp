@@ -305,7 +305,7 @@ namespace
 		case PCF::AlternativeType::kPerk:
 			result.value = static_cast<double>(a_display.rank);
 			result.strength = static_cast<double>(a_display.foundRank ? a_display.foundRank.rank : a_display.rank);
-			result.valueText = fmt::format("{:g}", result.value);
+			result.valueText = fmt::format("Rank {}", result.value);
 			break;
 		case PCF::AlternativeType::kActorValue:
 		case PCF::AlternativeType::kGlobalValue:
