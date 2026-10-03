@@ -9,10 +9,16 @@ namespace RE
 	class BGSPerk;
 	class PlayerCharacter;
 	class TESConditionItem;
+	namespace BSScript
+	{
+		class IVirtualMachine;
+	}
 }
 
 namespace PCF::PerkConditions
 {
+	[[nodiscard]] bool RegisterPapyrus(RE::BSScript::IVirtualMachine* a_vm);
+	[[nodiscard]] bool PapyrusHookActive();
 	[[nodiscard]] bool Install();
 	[[nodiscard]] RE::BGSPerk* GetConditionPerk(RE::TESConditionItem* a_item);
 	[[nodiscard]] bool IsPositivePerkCheck(RE::TESConditionItem* a_item);

@@ -6,6 +6,8 @@
 #include "PerkConditions.h"
 #include "RuleRegistry.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <memory>
 
@@ -14,6 +16,11 @@ namespace
 	using ConditionFunction = RE::SCRIPT_FUNCTION::ConditionFunctionType;
 	ConditionFunction* g_hasPerk{ nullptr };
 	ConditionFunction* g_dialogueHasPerk{ nullptr };
+	using PapyrusDispatch = bool (*)(const RE::BSScript::NF_util::NativeFunctionBase*, RE::BSScript::Variable&, RE::BSScript::Internal::VirtualMachine&,
+		RE::BSScript::StackID, RE::BSScript::Variable&, const RE::BSScript::StackFrame&);
+	PapyrusDispatch g_papyrusHasPerk{ nullptr };
+	RE::BSTSmartPointer<RE::BSScript::IFunction> g_papyrusHasPerkFunction;
+	std::array<std::uintptr_t, 0x18> g_papyrusHasPerkVtable{};
 	bool g_installed{ false };
 	// Checks a numeric condition.
 	bool CheckBoolean(float a_value, RE::ENUM_COMPARISON_CONDITION a_condition, float a_compare)
@@ -91,6 +98,53 @@ namespace
 		}
 		return currentActor && a_alternative.perk && currentActor->GetPerkRank(a_alternative.perk) >= a_alternative.rank;
 	}
+	bool PapyrusHasPerk(const RE::BSScript::NF_util::NativeFunctionBase* a_function, RE::BSScript::Variable& a_self,
+		RE::BSScript::Internal::VirtualMachine& a_vm, RE::BSScript::StackID a_stackID,
+		RE::BSScript::Variable& a_outResult, const RE::BSScript::StackFrame& a_stackFrame)
+	{
+		if (!g_papyrusHasPerk || !g_papyrusHasPerk(a_function, a_self, a_vm, a_stackID, a_outResult, a_stackFrame)) {
+			return false;
+		}
+		if (!g_hasPerk || !a_outResult.IsBool() || !a_stackFrame.parentStack || a_stackFrame.size < 1) {
+			return true;
+		}
+
+		auto* actor = RE::BSScript::Impl::UnpackVariable<RE::Actor*>(a_self);
+		if (!actor || actor != RE::PlayerCharacter::GetSingleton()) {
+			return true;
+		}
+		auto* argument = a_stackFrame.GetStackFrameVariable(0, a_stackFrame.GetPageForFrame());
+		auto* perk = argument ? RE::BSScript::Impl::UnpackVariable<RE::BGSPerk*>(*argument) : nullptr;
+		if (perk && PCF::RuleRegistry::Find(perk)) {
+			a_outResult.SetBool(PCF::PerkConditions::PlayerPasses(perk));
+		}
+		return true;
+	}
+
+	bool InstallPapyrusHasPerk(RE::BSScript::IVirtualMachine* a_vm)
+	{
+		if (!a_vm || g_papyrusHasPerk) {
+			return g_papyrusHasPerk != nullptr;
+		}
+		auto function = a_vm->GetMemberFunction(RE::BSFixedString("Actor"), RE::BSFixedString("HasPerk"));
+		if (!function.get() || !function->GetIsNative()) {
+			return false;
+		}
+		auto* vtable = *reinterpret_cast<std::uintptr_t**>(function.get());
+		if (!vtable || !vtable[0x16]) {
+			return false;
+		}
+
+		g_papyrusHasPerkVtable[0] = vtable[-1];
+		std::copy_n(vtable, 0x17, g_papyrusHasPerkVtable.begin() + 1);
+		g_papyrusHasPerk = reinterpret_cast<PapyrusDispatch>(vtable[0x16]);
+		g_papyrusHasPerkVtable[0x17] = reinterpret_cast<std::uintptr_t>(&PapyrusHasPerk);
+		auto* replacement = g_papyrusHasPerkVtable.data() + 1;
+		*reinterpret_cast<std::uintptr_t**>(function.get()) = replacement;
+		g_papyrusHasPerkFunction = function;
+		return true;
+	}
+
 	// Combines the game perk result with the configured rule.
 	bool Evaluate(ConditionFunction* a_original, RE::ConditionCheckParams& a_params,
 		void* a_perk, void* a_param1, float& a_value)
@@ -142,6 +196,15 @@ namespace
 
 namespace PCF::PerkConditions
 {
+	bool PapyrusHookActive()
+	{
+		return g_papyrusHasPerk != nullptr;
+	}
+
+	bool RegisterPapyrus(RE::BSScript::IVirtualMachine* a_vm)
+	{
+		return InstallPapyrusHasPerk(a_vm);
+	}
 	// Gets the perk used by a supported condition.
 	RE::BGSPerk* GetConditionPerk(RE::TESConditionItem* a_item)
 	{
