@@ -70,8 +70,9 @@ namespace
 	std::string GetFormName(const RE::TESForm* a_form, std::string_view a_fallback)
 	{
 		if (a_form) {
-			const std::string_view name = RE::TESFullName::GetFormFullName(a_form).value_or(RE::BGSLocalizedString{}).c_str();
-			if (!name.empty()) {
+			const auto fullName = RE::TESFullName::GetFormFullName(a_form);
+			const char* name = fullName ? fullName->c_str() : nullptr;
+			if (name && *name) {
 				return std::string(name);
 			}
 			const char* editorID = a_form->GetFormEditorID();
@@ -88,8 +89,9 @@ namespace
 		if (!a_form) {
 			return {};
 		}
-		const std::string_view name = RE::TESFullName::GetFormFullName(a_form).value_or(RE::BGSLocalizedString{}).c_str();
-		return name.empty() ? std::string{} : std::string(name);
+		const auto fullName = RE::TESFullName::GetFormFullName(a_form);
+		const char* name = fullName ? fullName->c_str() : nullptr;
+		return name && *name ? std::string(name) : std::string{};
 	}
 
 	// Compares visible names without caring about letter case.
@@ -305,13 +307,9 @@ namespace
 		case PCF::AlternativeType::kPerk:
 			result.value = static_cast<double>(a_display.rank);
 			result.strength = static_cast<double>(a_display.foundRank ? a_display.foundRank.rank : a_display.rank);
-			result.valueText = fmt::format("Rank {}", result.value);
+			result.valueText = fmt::format("{:g}", result.value);
 			break;
 		case PCF::AlternativeType::kActorValue:
-			result.value = static_cast<double>(a_display.requiredValue);
-			result.strength = a_display.comparison == PCF::ComparisonOp::kLess || a_display.comparison == PCF::ComparisonOp::kLessEqual ? -result.value : result.value;
-			result.valueText = fmt::format("Rank {:g}", a_display.requiredValue);
-			break;
 		case PCF::AlternativeType::kGlobalValue:
 			result.value = static_cast<double>(a_display.requiredValue);
 			result.strength = a_display.comparison == PCF::ComparisonOp::kLess || a_display.comparison == PCF::ComparisonOp::kLessEqual ? -result.value : result.value;

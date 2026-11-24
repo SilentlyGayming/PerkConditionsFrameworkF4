@@ -4,14 +4,17 @@
 
 #include "PCH.h"
 #include "Config.h"
+#include "Localization.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <cmath>
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <optional>
 #include <sstream>
 #include <string_view>
 #include <system_error>
@@ -295,11 +298,29 @@ namespace
 		std::string message;
 	};
 
+	struct LocalizationSettings
+	{
+		std::string file;
+		std::string fallback;
+		std::size_t fileLine{ 0 };
+		std::size_t fallbackLine{ 0 };
+		std::size_t sectionLine{ 0 };
+		bool present{ false };
+		bool conflict{ false };
+	};
+
 	struct ConfigResult
 	{
 		PCF::LoadedConfig config;
+		LocalizationSettings localization;
 		std::vector<ConfigIssue> issues;
 		bool valid{ true };
+	};
+
+	struct LocalizationState
+	{
+		PCF::Localization::Cache cache;
+		std::optional<std::string> language;
 	};
 
 	// Reads PCF configuration data.
@@ -326,9 +347,35 @@ namespace
 			const bool descriptionsSection = name == "Descriptions";
 			const bool requirementLabelsSection = name == "RequirementLabels";
 			const bool swfSection = name == "SWF";
+			const bool localizationSection = name == "Localization";
 			const auto* table = section.as_table();
-			if (!table || (!perkSection && !thresholdSection && !conditionsSection && !namesSection && !descriptionsSection && !requirementLabelsSection && !swfSection)) {
+			if (!table || (!perkSection && !thresholdSection && !conditionsSection && !namesSection && !descriptionsSection && !requirementLabelsSection && !swfSection && !localizationSection)) {
 				result.issues.push_back({ section.source().begin.line, "Unknown section: " + std::string(name) });
+				continue;
+			}
+
+			if (localizationSection) {
+				result.localization.present = true;
+				result.localization.sectionLine = section.source().begin.line;
+				for (const auto& [key, value] : *table) {
+					const auto line = static_cast<std::size_t>(key.source().begin.line);
+					const auto keyword = ToUpper(key.str());
+					const auto text = value.value_exact<std::string>();
+					if (keyword != "FILE" && keyword != "FALLBACK") {
+						result.issues.push_back({ line, "Unknown [Localization] key; expected File or Fallback" });
+					} else if (!text) {
+						result.issues.push_back({ line, "Expected a quoted [Localization] " + std::string(key.str()) + " string" });
+					} else {
+						auto& target = keyword == "FILE" ? result.localization.file : result.localization.fallback;
+						auto& targetLine = keyword == "FILE" ? result.localization.fileLine : result.localization.fallbackLine;
+						if (targetLine) {
+							result.issues.push_back({ (std::max)(line, targetLine), "Conflicting [Localization] " + std::string(key.str()) + "; localization disabled for this file" });
+							result.localization.conflict = true;
+						}
+						target = *text;
+						targetLine = line;
+					}
+				}
 				continue;
 			}
 
@@ -360,41 +407,24 @@ namespace
 					// and means this row is combined with the following row using native CTDA OR semantics.
 					const bool typedQuest = fields.size() >= 3 &&
 						(ToUpper(fields[2]) == "QUESTSTAGE" || ToUpper(fields[2]) == "QUESTSTAGEDONE");
-					const auto readModifiers = [&](std::size_t a_index) {
-						bool sawOR = false;
-						bool sawHide = false;
-						for (std::size_t i = a_index; i < fields.size(); ++i) {
-							const auto modifier = ToUpper(fields[i]);
-							if (modifier == "OR") {
-								if (sawOR) {
-									result.issues.push_back({ line, "Duplicate [Conditions] OR modifier" });
-									return false;
-								}
-								sawOR = true;
-								rule.orWithNext = true;
-								continue;
-							}
-							if (modifier == "HIDE") {
-								if (sawHide) {
-									result.issues.push_back({ line, "Duplicate [Conditions] HIDE modifier" });
-									return false;
-								}
-								sawHide = true;
-								rule.playerFacing = false;
-								continue;
-							}
-							result.issues.push_back({ line, "Invalid [Conditions] modifier; expected OR or HIDE" });
+					const auto readJoin = [&](std::size_t a_index) {
+						if (fields.size() <= a_index) {
+							return true;
+						}
+						if (ToUpper(fields[a_index]) != "OR") {
+							result.issues.push_back({ line, "Invalid [Conditions] join; expected OR" });
 							return false;
 						}
+						rule.orWithNext = true;
 						return true;
 					};
 
-					if (!typedQuest && fields.size() >= 6 && fields.size() <= 8) {
+					if (!typedQuest && (fields.size() == 6 || fields.size() == 7)) {
 						rule.type = PCF::CustomConditionType::kFormValue;
 						if (std::any_of(fields.begin(), fields.begin() + 4, [](std::string_view a_field) { return a_field.empty(); }) ||
-							!ReadComparison(fields[4], rule.comparison) || !ReadCheckValue(fields[5], rule.requiredValue) || !readModifiers(6)) {
+							!ReadComparison(fields[4], rule.comparison) || !ReadCheckValue(fields[5], rule.requiredValue) || !readJoin(6)) {
 							result.issues.push_back({ line,
-								"Expected targetPlugin|targetFormID|valuePlugin|valueFormID|comparison|requiredValue[|OR][|HIDE]" });
+								"Expected targetPlugin|targetFormID|valuePlugin|valueFormID|comparison|requiredValue[|OR]" });
 							continue;
 						}
 						rule.targetPlugin = fields[0];
@@ -405,13 +435,13 @@ namespace
 						continue;
 					}
 
-					if (typedQuest && fields.size() >= 7 && fields.size() <= 9) {
+					if (typedQuest && (fields.size() == 7 || fields.size() == 8)) {
 						const auto kind = ToUpper(fields[2]);
 						rule.type = kind == "QUESTSTAGE" ? PCF::CustomConditionType::kQuestStage : PCF::CustomConditionType::kQuestStageDone;
 						if (fields[0].empty() || fields[1].empty() || fields[3].empty() || fields[4].empty() ||
-							!ReadComparison(fields[5], rule.comparison) || !ReadCheckValue(fields[6], rule.requiredValue) || !readModifiers(7)) {
+							!ReadComparison(fields[5], rule.comparison) || !ReadCheckValue(fields[6], rule.requiredValue) || !readJoin(7)) {
 							result.issues.push_back({ line,
-								"Expected targetPlugin|targetFormID|QuestStage/QuestStageDone|questPlugin|questFormID|comparison|stage[|OR][|HIDE]" });
+								"Expected targetPlugin|targetFormID|QuestStage/QuestStageDone|questPlugin|questFormID|comparison|stage[|OR]" });
 							continue;
 						}
 						if (rule.type == PCF::CustomConditionType::kQuestStageDone && rule.comparison != PCF::ComparisonOp::kEqual) {
@@ -427,7 +457,7 @@ namespace
 					}
 
 					result.issues.push_back({ line,
-						"Expected a 6-field form-value or 7-field typed quest condition, optionally followed by |OR and/or |HIDE" });
+						"Expected a 6-field form-value or 7-field typed quest condition, optionally followed by |OR" });
 					continue;
 				}
 
@@ -567,8 +597,114 @@ namespace
 		return result;
 	}
 
+	// Resolves translation keys in one localized configuration file before its rows are merged.
+	void LocalizeText(ConfigResult& a_result, LocalizationState& a_state)
+	{
+		const auto& settings = a_result.localization;
+		if (!settings.present) {
+			return;
+		}
+		const auto stem = settings.conflict ? std::nullopt : PCF::Localization::CleanResourcePath(settings.file);
+		if (!stem && !settings.conflict) {
+			a_result.issues.push_back({ settings.fileLine ? settings.fileLine : settings.sectionLine, "Invalid [Localization] File; expected a Data-relative path without a language suffix or .txt extension" });
+		}
+		const bool fallbackValid = settings.fallback.empty() || PCF::Localization::IsLanguage(settings.fallback);
+		if (!fallbackValid) {
+			a_result.issues.push_back({ settings.fallbackLine, "Invalid [Localization] Fallback; expected a language suffix such as en" });
+		}
+
+		std::string primaryPath;
+		const PCF::Localization::Table* primary = nullptr;
+		const PCF::Localization::Table* fallback = nullptr;
+		bool loaded = false;
+		const auto find = [&](std::string_view a_key) -> std::array<const std::string*, 2> {
+			if (!stem) {
+				return {};
+			}
+			if (!loaded) {
+				loaded = true;
+				if (!a_state.language) {
+					a_state.language = PCF::Localization::GetLanguage();
+					if (PCF::Localization::IsLanguage(*a_state.language)) {
+						spdlog::info("Localization: active game language {}", *a_state.language);
+					} else {
+						spdlog::warn("Localization: active game language unavailable; only configured fallback resources will be used");
+						a_state.language->clear();
+					}
+				}
+				if (!a_state.language->empty()) {
+					primaryPath = PCF::Localization::MakePath(*stem, *a_state.language);
+					primary = PCF::Localization::Load(a_state.cache, primaryPath);
+				}
+				if (!settings.fallback.empty() && fallbackValid) {
+					fallback = PCF::Localization::Load(a_state.cache, PCF::Localization::MakePath(*stem, settings.fallback));
+				}
+			}
+			const auto key = PCF::Localization::MakeKey(a_key);
+			std::array<const std::string*, 2> result{};
+			for (std::size_t i = 0; i < result.size(); ++i) {
+				const auto* table = i ? fallback : primary;
+				if (!table) {
+					continue;
+				}
+				if (const auto entry = table->entries.find(key); entry != table->entries.end()) {
+					result[i] = std::addressof(entry->second);
+				}
+			}
+			return result;
+		};
+
+		// Keeps literal text, unescapes $$, or replaces a key with its translation.
+		const auto resolve = [&](std::string& a_text, std::size_t a_line, bool a_exact, bool a_description) {
+			if (a_text.starts_with("$$")) {
+				a_text.erase(0, 1);
+				return true;
+			}
+			if (!PCF::Localization::IsKey(a_text)) {
+				return true;
+			}
+			std::string_view problem = "Missing translation";
+			for (const auto* translation : find(a_text)) {
+				if (!translation) {
+					continue;
+				}
+				const auto text = a_exact ? std::string_view(*translation) : Trim(*translation);
+				if (!a_exact && text.empty()) {
+					problem = "Empty translation";
+				} else if (a_description && text.size() >= (std::numeric_limits<std::uint16_t>::max)()) {
+					problem = "Translation exceeds the native 16-bit string limit";
+				} else {
+					a_text.assign(text);
+					return true;
+				}
+			}
+			a_result.issues.push_back({ a_line, fmt::format("{} for {}{}; assignment skipped", problem, a_text,
+				primaryPath.empty() ? std::string{} : " in " + primaryPath) });
+			return false;
+		};
+
+		const auto localizeRows = [&](auto& a_rows, auto a_text, bool a_exact, bool a_description) {
+			auto kept = a_rows.begin();
+			for (auto it = a_rows.begin(); it != a_rows.end(); ++it) {
+				if (!resolve((*it).*a_text, it->line, a_exact, a_description)) {
+					continue;
+				}
+				if (kept != it) {
+					*kept = std::move(*it);
+				}
+				++kept;
+			}
+			a_rows.erase(kept, a_rows.end());
+		};
+		auto& config = a_result.config;
+		localizeRows(config.nameAssignments, &PCF::RawNameAssignment::name, false, false);
+		localizeRows(config.requirementLabels, &PCF::RawRequirementLabel::label, false, false);
+		localizeRows(config.descriptionRules, &PCF::RawDescriptionRule::description, false, true);
+		localizeRows(config.actorValueDescriptions, &PCF::RawActorValueDescriptionAssignment::description, true, true);
+	}
+
 	// Loads a configuration file and adds its settings.
-	bool LoadConfigFile(const std::filesystem::path& a_path, PCF::LoadedConfig& a_config)
+	bool LoadConfigFile(const std::filesystem::path& a_path, PCF::LoadedConfig& a_config, LocalizationState& a_localization)
 	{
 		std::ifstream file(a_path, std::ios::binary);
 		std::string text;
@@ -587,6 +723,9 @@ namespace
 		}
 
 		auto configResult = ReadConfig(text, a_path);
+		if (configResult.valid) {
+			LocalizeText(configResult, a_localization);
+		}
 		std::string issues;
 		for (const auto& issue : configResult.issues) {
 			fmt::format_to(std::back_inserter(issues), "\n- line {}: {}", issue.line, issue.message);
@@ -653,8 +792,9 @@ namespace PCF::Config
 		std::ranges::sort(files);
 		spdlog::info("{} matching TOML file(s) found", files.size());
 		config.matchingFileCount = files.size();
+		LocalizationState localization;
 		for (const auto& path : files) {
-			config.loadedFileCount += LoadConfigFile(path, config) ? 1 : 0;
+			config.loadedFileCount += LoadConfigFile(path, config, localization) ? 1 : 0;
 		}
 		return config;
 	}

@@ -9,6 +9,7 @@
 #include "RuleRegistry.h"
 #include "TextManager.h"
 #include "CustomConditions.h"
+#include "TextRewriter.h"
 
 #include <algorithm>
 #include <array>
@@ -208,28 +209,96 @@ namespace
 	}
 
 
-	// Trims ASCII whitespace without changing the owned dialogue string.
+	// Gets the byte length of a space character that ends at a position.
+	std::size_t SpaceLengthBefore(std::string_view a_text, std::size_t a_end)
+	{
+		for (std::size_t length = 1; length <= 3 && length <= a_end; ++length) {
+			if (PCF::TextRewriter::Detail::SpaceLength(a_text, a_end - length) == length) {
+				return length;
+			}
+		}
+		return 0;
+	}
+
+	// Trims ASCII and Unicode spaces without changing the owned dialogue string.
 	std::string_view TrimRequirementWhitespace(std::string_view a_text)
 	{
-		while (!a_text.empty() && std::isspace(static_cast<unsigned char>(a_text.front()))) {
-			a_text.remove_prefix(1);
-		}
-		while (!a_text.empty() && std::isspace(static_cast<unsigned char>(a_text.back()))) {
-			a_text.remove_suffix(1);
+		a_text.remove_prefix(PCF::TextRewriter::Detail::SkipSpaces(a_text, 0));
+		while (const auto length = SpaceLengthBefore(a_text, a_text.size())) {
+			a_text.remove_suffix(length);
 		}
 		return a_text;
 	}
 
-	// Compares requirement labels without caring about case.
+	// Compares requirement labels without caring about case or which space characters separate words.
 	bool SameRequirementText(std::string_view a_left, std::string_view a_right)
 	{
+		using namespace PCF::TextRewriter::Detail;
 		a_left = TrimRequirementWhitespace(a_left);
 		a_right = TrimRequirementWhitespace(a_right);
-		return a_left.size() == a_right.size() && std::equal(a_left.begin(), a_left.end(), a_right.begin(),
-			[](char a_leftCharacter, char a_rightCharacter) {
-				return std::tolower(static_cast<unsigned char>(a_leftCharacter)) ==
-					std::tolower(static_cast<unsigned char>(a_rightCharacter));
-			});
+		std::size_t left = 0;
+		std::size_t right = 0;
+		while (left < a_left.size() && right < a_right.size()) {
+			const bool leftSpace = SpaceLength(a_left, left) != 0;
+			if (leftSpace || SpaceLength(a_right, right) != 0) {
+				if (!leftSpace || !SpaceLength(a_right, right)) {
+					return false;
+				}
+				left = SkipSpaces(a_left, left);
+				right = SkipSpaces(a_right, right);
+				continue;
+			}
+			std::size_t leftLength = 1;
+			std::size_t rightLength = 1;
+			if (!SameCharacter(a_left, left, leftLength, a_right, right, rightLength)) {
+				return false;
+			}
+			left += leftLength;
+			right += rightLength;
+		}
+		return left == a_left.size() && right == a_right.size();
+	}
+
+	// Gets the native and PCF display names of all actor values once game data is loaded.
+	std::vector<std::string> GetActorValueNames()
+	{
+		std::vector<std::string> result;
+		if (auto* data = RE::TESDataHandler::GetSingleton()) {
+			for (auto* actorValue : data->GetFormArray<RE::ActorValueInfo>()) {
+				if (!actorValue) {
+					continue;
+				}
+				const auto fullName = RE::TESFullName::GetFormFullName(actorValue);
+				const char* name = fullName ? fullName->c_str() : nullptr;
+				if (name && *name) {
+					result.emplace_back(name);
+				}
+				if (const auto* display = PCF::RuleRegistry::GetDisplayName(actorValue); display && !display->empty()) {
+					result.push_back(*display);
+				}
+			}
+		}
+		return result;
+	}
+
+	// Checks whether a marker label names a SPECIAL abbreviation, an actor value, or its PCF display name.
+	bool IsRequirementLabel(std::string_view a_label)
+	{
+		constexpr std::array<std::string_view, 14> knownNumericRequirements{
+			"STR", "PER", "END", "CHA", "INT", "AGI", "LCK",
+			"Strength", "Perception", "Endurance", "Charisma", "Intelligence", "Agility", "Luck"
+		};
+		if (std::ranges::any_of(knownNumericRequirements, [&](std::string_view a_known) { return SameRequirementText(a_label, a_known); })) {
+			return true;
+		}
+		// Names are kept only once data has produced some, so an early call cannot cache an empty list.
+		static std::mutex lock;
+		static std::vector<std::string> names;
+		std::scoped_lock guard(lock);
+		if (names.empty()) {
+			names = GetActorValueNames();
+		}
+		return std::ranges::any_of(names, [&](const std::string& a_known) { return SameRequirementText(a_label, a_known); });
 	}
 
 	// Checks whether a leading marker names one of the discarded native HasPerk requirements.
@@ -247,8 +316,9 @@ namespace
 				if (!a_perk) {
 					return false;
 				}
-				const std::string_view name = RE::TESFullName::GetFormFullName(a_perk).value_or(RE::BGSLocalizedString{}).c_str();
-				return !name.empty() && SameRequirementText(a_marker, name);
+				const auto fullName = RE::TESFullName::GetFormFullName(a_perk);
+				const char* name = fullName ? fullName->c_str() : nullptr;
+				return name && *name && SameRequirementText(a_marker, name);
 			};
 			if (matches(source)) {
 				return true;
@@ -261,60 +331,56 @@ namespace
 		return false;
 	}
 
-	// Recognizes compact numeric requirement tags used by dialogue patches, such as (PER 2) or [Science 75+].
+	// Recognizes compact numeric requirement tags used by dialogue patches, such as (PER 2), [Science 75+] or [STR >= 6].
 	bool IsNumericRequirementMarker(std::string_view a_marker)
 	{
 		a_marker = TrimRequirementWhitespace(a_marker);
-		if (a_marker.empty()) {
-			return false;
-		}
-		bool hasDigit = false;
-		bool hasComparison = false;
-		for (const char character : a_marker) {
-			const auto value = static_cast<unsigned char>(character);
-			if (std::isdigit(value)) {
-				hasDigit = true;
-				continue;
+		auto end = a_marker.size();
+		const bool plus = end != 0 && a_marker[end - 1] == '+';
+		end -= plus ? 1 : 0;
+		const auto readDigits = [&]() {
+			const auto last = end;
+			while (end != 0 && a_marker[end - 1] >= '0' && a_marker[end - 1] <= '9') {
+				--end;
 			}
-			if (std::isalpha(value) || std::isspace(value) || character == '_' || character == '-') {
-				continue;
-			}
-			if (character == '+' || character == '<' || character == '>' || character == '=') {
-				hasComparison = true;
-				continue;
-			}
-			if (character == '.') {
-				continue;
-			}
-			return false;
-		}
-		if (!hasDigit) {
-			return false;
-		}
-		if (hasComparison) {
-			return true;
-		}
-
-		const auto separator = a_marker.find_first_of(" \t");
-		if (separator == std::string_view::npos) {
-			return false;
-		}
-		const auto name = TrimRequirementWhitespace(a_marker.substr(0, separator));
-		constexpr std::array<std::string_view, 14> knownNumericRequirements{
-			"STR", "PER", "END", "CHA", "INT", "AGI", "LCK",
-			"Strength", "Perception", "Endurance", "Charisma", "Intelligence", "Agility", "Luck"
+			return end != last;
 		};
-		return std::any_of(knownNumericRequirements.begin(), knownNumericRequirements.end(),
-			[&](std::string_view a_known) { return SameRequirementText(name, a_known); });
+		if (!readDigits()) {
+			return false;
+		}
+		if (end != 0 && a_marker[end - 1] == '.') {
+			--end;
+			if (!readDigits()) {
+				return false;
+			}
+		}
+		bool spaced = false;
+		while (const auto length = SpaceLengthBefore(a_marker, end)) {
+			end -= length;
+			spaced = true;
+		}
+		auto comparison = end;
+		while (comparison != 0 && end - comparison < 2 && std::string_view("<>=").find(a_marker[comparison - 1]) != std::string_view::npos) {
+			--comparison;
+		}
+		if (comparison != end) {
+			constexpr std::array<std::string_view, 6> operators{ "<", ">", "=", "<=", ">=", "==" };
+			if (plus || std::ranges::find(operators, a_marker.substr(comparison, end - comparison)) == operators.end()) {
+				return false;
+			}
+			end = comparison;
+		} else if (!spaced) {
+			return false;
+		}
+		const auto label = TrimRequirementWhitespace(a_marker.substr(0, end));
+		return !label.empty() && IsRequirementLabel(label);
 	}
 
 	// Removes only leading legacy requirement decorations from an INFO explicitly owned by [Conditions].
 	// The dialogue sentence itself remains the final winning/canonical text supplied by the load order.
 	std::string RemoveDiscardedRequirementMarkers(const RE::TESTopicInfo* a_info, std::string_view a_text)
 	{
-		while (!a_text.empty() && std::isspace(static_cast<unsigned char>(a_text.front()))) {
-			a_text.remove_prefix(1);
-		}
+		a_text.remove_prefix(PCF::TextRewriter::Detail::SkipSpaces(a_text, 0));
 		while (!a_text.empty() && (a_text.front() == '[' || a_text.front() == '(')) {
 			const char close = a_text.front() == '[' ? ']' : ')';
 			const auto end = a_text.find(close, 1);
@@ -326,9 +392,7 @@ namespace
 				break;
 			}
 			a_text.remove_prefix(end + 1);
-			while (!a_text.empty() && std::isspace(static_cast<unsigned char>(a_text.front()))) {
-				a_text.remove_prefix(1);
-			}
+			a_text.remove_prefix(PCF::TextRewriter::Detail::SkipSpaces(a_text, 0));
 		}
 		return std::string(a_text);
 	}

@@ -189,6 +189,8 @@ namespace PCF::EngineIDs
 	inline constexpr F4SE::VariantId TESConditionIsTrueForAllButFunction{ 1182457, 2211991, 2211991 };
 	inline constexpr F4SE::VariantId WorkbenchChoiceRequirements{ 1484640, 2223051, 2223051 };
 	inline constexpr F4SE::VariantId GFxSetMember{ 1360149, 2286589, 2286589 };
+	inline constexpr F4SE::VariantId ActorGetPerkRank{ 1368313, 2230125, 2230125 };
+	inline constexpr F4SE::VariantId WorkshopMenuUpdateButtonText{ 1089189, 2224992, 2224992 };
 }
 
 namespace PCF::PRKFCompatibility

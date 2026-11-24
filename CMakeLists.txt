@@ -13,19 +13,7 @@ macro(set_from_environment VARIABLE)
 endmacro()
 
 set_from_environment(Fallout4Path)
-set_from_environment(VCPKG_ROOT)
-set_from_environment(CommonLibF4Path)
-set_from_environment(TOMLPLUSPLUS_PATH)
-
-if (DEFINED VCPKG_ROOT)
-	set(CMAKE_TOOLCHAIN_FILE "${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
-	set(VCPKG_TARGET_TRIPLET "x64-windows-static-md" CACHE STRING "")
-else ()
-	message(
-		WARNING
-		"Variable VCPKG_ROOT is not set. Continuing without vcpkg."
-	)
-endif ()
+include(cmake/Dependencies.cmake)
 
 set(Boost_USE_STATIC_RUNTIME OFF CACHE BOOL "")
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL" CACHE STRING "")
@@ -71,7 +59,9 @@ if (NOT ${CMAKE_GENERATOR} STREQUAL "Ninja")
 	)
 endif ()
 
-set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+# Avoid MSVC link-time code generation crashes; keep normal Release optimization.
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF)
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_DEBUG OFF)
 
 set(Boost_USE_STATIC_LIBS ON)
@@ -101,6 +91,11 @@ if (NOT TARGET CommonLibF4)
 	set(COMMONLIB_RUNTIME_VR OFF CACHE BOOL "" FORCE)
 	add_subdirectory("${CommonLibF4Path}" CommonLibF4)
 endif ()
+
+set_target_properties(CommonLibF4 PROPERTIES
+	INTERPROCEDURAL_OPTIMIZATION OFF
+	INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF
+)
 
 find_package(fmt REQUIRED CONFIG)
 find_package(spdlog REQUIRED CONFIG)

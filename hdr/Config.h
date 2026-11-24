@@ -31,7 +31,6 @@ namespace PCF
 		std::string conditionReference;
 		float requiredValue{ 0.0F };
 		bool orWithNext{ false };
-		bool playerFacing{ true };
 		std::filesystem::path file;
 		std::size_t line{ 0 };
 	};

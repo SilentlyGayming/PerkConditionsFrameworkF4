@@ -4,6 +4,7 @@
 
 #include "PCH.h"
 #include "SourcePerkNames.h"
+#include "Localization.h"
 
 #include <zlib.h>
 
@@ -455,17 +456,6 @@ namespace
 		return result;
 	}
 
-	// Gets the active Fallout language.
-	std::string GetLanguage()
-	{
-		auto* settings = RE::INISettingCollection::GetSingleton();
-		auto* language = settings ? settings->GetSetting("sLanguage:General") : nullptr;
-		if (!language || language->GetType() != RE::Setting::SETTING_TYPE::kString) {
-			return {};
-		}
-		return std::string(language->GetString());
-	}
-
 	// Builds the STRINGS file path for a plugin.
 	std::string GetStringsPath(std::string_view a_plugin, std::string_view a_language)
 	{
@@ -509,7 +499,7 @@ namespace PCF::SourcePerkNames
 			}
 			group.requests.push_back({ source->GetLocalFormID(), reinterpret_cast<std::uintptr_t>(source) });
 		}
-		const auto language = GetLanguage();
+		const auto language = PCF::Localization::GetLanguage();
 		for (auto& [key, group] : groups) {
 			(void)key;
 			ResourceByteReader plugin(group.filename);

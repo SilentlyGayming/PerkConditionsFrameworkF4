@@ -14,12 +14,19 @@
 
 #include <Zydis/Zydis.h>
 
+#ifndef NOMINMAX
+#	define NOMINMAX
+#endif
+#include <Windows.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -1644,7 +1651,468 @@ namespace
 		}
 		return 0;
 	}
-// Installs the hook used to control Workshop artwork.
+
+	using PerkRankFunction = std::uint8_t (*)(RE::Actor*, RE::BGSPerk*);
+	PerkRankFunction g_workshopPerkRank{ nullptr };
+	RE::TESForm* const* g_workshopPerkField{ nullptr };
+	std::atomic<bool> g_workshopPerkHookInstalled{ false };
+
+	// Checks a native Workshop perk requirement through the configured replacement rule.
+	std::uint8_t WorkshopPerkRankHook(RE::Actor* a_actor, RE::BGSPerk* a_perk)
+	{
+		const auto rank = g_workshopPerkRank(a_actor, a_perk);
+		if (!g_workshopPerkHookInstalled.load(std::memory_order_acquire) || !g_workshopPerkField ||
+			!a_perk || a_perk != *g_workshopPerkField || a_actor != RE::PlayerCharacter::GetSingleton() ||
+			!PCF::RuleRegistry::Find(a_perk)) {
+			return rank;
+		}
+		return PCF::PerkConditions::PlayerPasses(a_perk) ? (std::max)(rank, std::uint8_t{ 1 }) : std::uint8_t{ 0 };
+	}
+
+	// Checks that an address range is readable within the loaded game image.
+	bool IsInGameImage(std::uintptr_t a_address, std::size_t a_size)
+	{
+		const auto base = reinterpret_cast<std::uintptr_t>(::GetModuleHandleW(nullptr));
+		if (!base || !a_size || a_address < base) {
+			return false;
+		}
+		const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+		const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(base + dos->e_lfanew);
+		const std::size_t size = nt->OptionalHeader.SizeOfImage;
+		if (a_size > size || a_address - base > size - a_size) {
+			return false;
+		}
+		MEMORY_BASIC_INFORMATION info{};
+		if (!::VirtualQuery(reinterpret_cast<const void*>(a_address), &info, sizeof(info)) ||
+			info.State != MEM_COMMIT || info.AllocationBase != reinterpret_cast<void*>(base) ||
+			(info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0 ||
+			(info.Protect & 0xFF) == PAGE_EXECUTE) {
+			return false;
+		}
+		const auto region = reinterpret_cast<std::uintptr_t>(info.BaseAddress);
+		return a_address >= region && a_size <= info.RegionSize && a_address - region <= info.RegionSize - a_size;
+	}
+
+	// Gets the end of a native function from its chained unwind entries.
+	std::uintptr_t GetFunctionEnd(std::uintptr_t a_function)
+	{
+		constexpr std::uint8_t kChainInfo = 0x04;
+		constexpr std::size_t kMaxEntries = 64;
+		const auto base = reinterpret_cast<std::uintptr_t>(::GetModuleHandleW(nullptr));
+		if (!base || !IsInGameImage(a_function, 1)) {
+			return 0;
+		}
+		const auto getRoot = [base](const RUNTIME_FUNCTION* a_entry) {
+			for (std::size_t i = 0; a_entry && i < kMaxEntries; ++i) {
+				if (!IsInGameImage(reinterpret_cast<std::uintptr_t>(a_entry), sizeof(*a_entry)) ||
+					a_entry->BeginAddress >= a_entry->EndAddress ||
+					!IsInGameImage(base + a_entry->BeginAddress, a_entry->EndAddress - a_entry->BeginAddress) ||
+					!IsInGameImage(base + a_entry->UnwindData, 4)) {
+					return std::uintptr_t{ 0 };
+				}
+				const auto* unwind = reinterpret_cast<const std::uint8_t*>(base + a_entry->UnwindData);
+				if (((unwind[0] >> 3) & kChainInfo) == 0) {
+					return base + a_entry->BeginAddress;
+				}
+				a_entry = reinterpret_cast<const RUNTIME_FUNCTION*>(unwind + 4 + ((unwind[2] + 1) & ~1) * 2);
+			}
+			return std::uintptr_t{ 0 };
+		};
+		std::uintptr_t end = a_function;
+		for (std::size_t i = 0; i < kMaxEntries; ++i) {
+			DWORD64 imageBase = 0;
+			const auto* entry = ::RtlLookupFunctionEntry(end, &imageBase, nullptr);
+			if (!entry) {
+				return end == a_function ? 0 : end;
+			}
+			const auto root = imageBase == base ? getRoot(entry) : 0;
+			if (!root) {
+				return 0;
+			}
+			if (root != a_function) {
+				return end == a_function ? 0 : end;
+			}
+			if (base + entry->BeginAddress != end || base + entry->EndAddress <= end) {
+				return 0;
+			}
+			end = base + entry->EndAddress;
+		}
+		return 0;
+	}
+
+	// Finds the single player perk-rank check in one native Workshop function and the global its perk is read from.
+	std::uintptr_t FindPerkRankCall(std::uintptr_t a_function, std::uintptr_t a_perkRank, std::uintptr_t& a_perkField)
+	{
+		constexpr std::int64_t kNoSlot = INT64_MIN;
+		enum class Kind : std::uint8_t { kUnknown, kGlobal, kStack };
+		struct Value
+		{
+			constexpr Value(Kind a_kind = Kind::kUnknown, std::int64_t a_value = 0, std::int64_t a_slot = INT64_MIN) noexcept :
+				kind(a_kind), value(a_value), slot(a_slot)
+			{}
+
+			Kind kind;
+			std::int64_t value;
+			std::int64_t slot;
+		};
+		a_perkField = 0;
+		const auto text = REL::Module::GetSingleton()->GetSection(REL::MODULE_SECTION_NAME_TEXT);
+		const auto end = GetFunctionEnd(a_function);
+		auto* player = RE::PlayerCharacter::GetSingleton();
+		if (!player || a_function < text.GetAddress() || end <= a_function || end - text.GetAddress() > text.GetSize()) {
+			return 0;
+		}
+		ZydisDecoder decoder;
+		if (!ZYAN_SUCCESS(ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64))) {
+			return 0;
+		}
+		ZydisDecodedInstruction instruction;
+		ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
+		const auto decode = [&](std::uintptr_t a_address) {
+			return ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, reinterpret_cast<const void*>(a_address), end - a_address,
+				&instruction, operands)) && instruction.length != 0;
+		};
+		const auto indexOf = [](ZydisRegister a_register) {
+			const auto full = ZydisRegisterGetLargestEnclosing(ZYDIS_MACHINE_MODE_LONG_64, a_register);
+			return full >= ZYDIS_REGISTER_RAX && full <= ZYDIS_REGISTER_R15 ? static_cast<std::size_t>(full - ZYDIS_REGISTER_RAX) : std::size_t{ 16 };
+		};
+		const auto isBranch = [&]() {
+			return instruction.meta.category == ZYDIS_CATEGORY_COND_BR || instruction.meta.category == ZYDIS_CATEGORY_UNCOND_BR;
+		};
+
+		// Branch targets end straight-line tracking; frame registers set by the prologue survive them.
+		std::vector<std::uintptr_t> targets;
+		std::array<std::uint32_t, 16> bodyWrites{};
+		bool body = false;
+		for (auto address = a_function; address < end; address += instruction.length) {
+			if (!decode(address)) {
+				return 0;
+			}
+			ZyanU64 target = 0;
+			if (isBranch()) {
+				if (instruction.operand_count_visible == 0 || operands[0].type != ZYDIS_OPERAND_TYPE_IMMEDIATE) {
+					return 0;
+				}
+				if (ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(&instruction, &operands[0], address, &target))) {
+					targets.push_back(static_cast<std::uintptr_t>(target));
+				}
+			}
+			for (std::uint8_t i = 0; body && instruction.mnemonic != ZYDIS_MNEMONIC_POP && i < instruction.operand_count; ++i) {
+				if (operands[i].type == ZYDIS_OPERAND_TYPE_REGISTER && (operands[i].actions & ZYDIS_OPERAND_ACTION_MASK_WRITE) != 0) {
+					if (const auto index = indexOf(operands[i].reg.value); index < bodyWrites.size()) {
+						++bodyWrites[index];
+					}
+				}
+			}
+			body = body || isBranch() || instruction.mnemonic == ZYDIS_MNEMONIC_CALL || instruction.mnemonic == ZYDIS_MNEMONIC_RET;
+		}
+		std::ranges::sort(targets);
+
+		constexpr std::size_t rdx = ZYDIS_REGISTER_RDX - ZYDIS_REGISTER_RAX;
+		constexpr std::size_t rsp = ZYDIS_REGISTER_RSP - ZYDIS_REGISTER_RAX;
+		constexpr std::array<ZydisRegister, 7> volatiles{ ZYDIS_REGISTER_RAX, ZYDIS_REGISTER_RCX, ZYDIS_REGISTER_RDX,
+			ZYDIS_REGISTER_R8, ZYDIS_REGISTER_R9, ZYDIS_REGISTER_R10, ZYDIS_REGISTER_R11 };
+		std::array<Value, 16> registers{};
+		registers[rsp] = { Kind::kStack, 0 };
+		std::optional<std::array<Value, 16>> frame;
+		std::vector<std::pair<std::int64_t, std::uintptr_t>> stores;
+		std::vector<std::pair<std::int64_t, std::int64_t>> clobbered;
+		bool unboundedStackWrite = false;
+		bool restart = false;
+		std::uintptr_t match = 0;
+		std::int64_t matchSlot = kNoSlot;
+		std::uint32_t stage = 0;
+		bool expectTest = false;
+		const auto isStackBase = [&](const ZydisDecodedOperand& a_operand) {
+			const auto base = indexOf(a_operand.mem.base);
+			return base < registers.size() && registers[base].kind == Kind::kStack;
+		};
+		const auto stackAddress = [&](const ZydisDecodedOperand& a_operand) -> std::optional<std::int64_t> {
+			const auto base = indexOf(a_operand.mem.base);
+			if (base >= registers.size() || registers[base].kind != Kind::kStack) {
+				return std::nullopt;
+			}
+			if (a_operand.mem.index != ZYDIS_REGISTER_NONE) {
+				return std::nullopt;
+			}
+			return registers[base].value + a_operand.mem.disp.value;
+		};
+		for (auto address = a_function; address < end; address += instruction.length) {
+			if (!decode(address)) {
+				return 0;
+			}
+			if (std::exchange(restart, false) || std::ranges::binary_search(targets, address)) {
+				for (std::size_t i = 0; i < registers.size(); ++i) {
+					const bool keep = frame && (i == rsp || ((*frame)[i].kind == Kind::kStack && bodyWrites[i] == 0));
+					registers[i] = keep ? (*frame)[i] : (i == rsp ? registers[i] : Value{});
+				}
+				stage = 0;
+			}
+			const auto isRegister = [&](std::uint8_t a_index, ZydisRegister a_register) {
+				return a_index < instruction.operand_count_visible && operands[a_index].type == ZYDIS_OPERAND_TYPE_REGISTER && operands[a_index].reg.value == a_register;
+			};
+			if (std::exchange(expectTest, false) &&
+				(instruction.mnemonic != ZYDIS_MNEMONIC_TEST || !isRegister(0, ZYDIS_REGISTER_AL) || !isRegister(1, ZYDIS_REGISTER_AL))) {
+				return 0;
+			}
+			ZyanU64 target = 0;
+			const bool isCall = instruction.mnemonic == ZYDIS_MNEMONIC_CALL;
+			const bool isMove = instruction.mnemonic == ZYDIS_MNEMONIC_MOV && instruction.operand_count_visible == 2;
+			const bool loadsPlayer = isMove && isRegister(0, ZYDIS_REGISTER_RCX) &&
+				operands[1].type == ZYDIS_OPERAND_TYPE_MEMORY && operands[1].mem.base == ZYDIS_REGISTER_RIP &&
+				ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(&instruction, &operands[1], address, &target)) &&
+				IsInGameImage(static_cast<std::uintptr_t>(target), sizeof(void*)) &&
+				*reinterpret_cast<RE::PlayerCharacter* const*>(target) == player;
+			const bool loadsPerk = isMove && isRegister(0, ZYDIS_REGISTER_RDX) && operands[1].type == ZYDIS_OPERAND_TYPE_REGISTER &&
+				ZydisRegisterGetWidth(ZYDIS_MACHINE_MODE_LONG_64, operands[1].reg.value) == 64;
+			const bool callsPerkRank = isCall && instruction.length == 5 && instruction.operand_count_visible != 0 &&
+				operands[0].type == ZYDIS_OPERAND_TYPE_IMMEDIATE && operands[0].imm.is_relative &&
+				ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(&instruction, &operands[0], address, &target)) && target == a_perkRank;
+			const auto previous = std::exchange(stage, 0u);
+			if (loadsPlayer) {
+				stage = 1;
+			} else if (previous == 1 && loadsPerk) {
+				stage = 2;
+			} else if (callsPerkRank) {
+				const auto& perk = registers[rdx];
+				if (previous != 2 || match || perk.kind != Kind::kGlobal) {
+					return 0;
+				}
+				match = address;
+				matchSlot = perk.slot;
+				a_perkField = static_cast<std::uintptr_t>(perk.value);
+				expectTest = true;
+			}
+
+			// Track 64-bit values loaded from RIP-relative globals through registers and 8-byte stack slots.
+			const bool wide = instruction.operand_count_visible != 0 && operands[0].type == ZYDIS_OPERAND_TYPE_REGISTER && operands[0].size == 64;
+			const auto destination = wide ? indexOf(operands[0].reg.value) : std::size_t{ 16 };
+			std::optional<Value> tracked;
+			if (isMove && wide && destination < registers.size()) {
+				if (operands[1].type == ZYDIS_OPERAND_TYPE_REGISTER && operands[1].size == 64) {
+					const auto source = indexOf(operands[1].reg.value);
+					if (source < registers.size()) {
+						tracked = registers[source];
+					}
+				} else if (operands[1].type == ZYDIS_OPERAND_TYPE_MEMORY && operands[1].mem.base == ZYDIS_REGISTER_RIP &&
+						   operands[1].mem.index == ZYDIS_REGISTER_NONE && operands[1].size == 64 &&
+						   ZYAN_SUCCESS(ZydisCalcAbsoluteAddress(&instruction, &operands[1], address, &target))) {
+					tracked = Value{ Kind::kGlobal, static_cast<std::int64_t>(target) };
+				} else if (operands[1].type == ZYDIS_OPERAND_TYPE_MEMORY && operands[1].size == 64) {
+					if (const auto slot = stackAddress(operands[1])) {
+						tracked = Value{ Kind::kUnknown, 0, *slot };
+						for (const auto& [offset, source] : stores) {
+							if (offset == *slot && source) {
+								tracked = Value{ Kind::kGlobal, static_cast<std::int64_t>(source), *slot };
+							}
+						}
+					}
+				}
+			} else if (instruction.mnemonic == ZYDIS_MNEMONIC_LEA && instruction.operand_count_visible == 2 &&
+				wide && destination < registers.size() && operands[1].type == ZYDIS_OPERAND_TYPE_MEMORY) {
+				unboundedStackWrite = unboundedStackWrite || (isStackBase(operands[1]) && operands[1].mem.index != ZYDIS_REGISTER_NONE);
+				if (const auto slot = stackAddress(operands[1])) {
+					tracked = Value{ Kind::kStack, *slot };
+					if (destination != rsp) {
+						clobbered.emplace_back(*slot, *slot + 8);
+					}
+				}
+			}
+			for (std::uint8_t i = 0; i < instruction.operand_count; ++i) {
+				const auto& operand = operands[i];
+				if ((operand.actions & ZYDIS_OPERAND_ACTION_MASK_WRITE) == 0) {
+					continue;
+				}
+				if (operand.type == ZYDIS_OPERAND_TYPE_MEMORY) {
+					unboundedStackWrite = unboundedStackWrite || (isStackBase(operand) && operand.mem.index != ZYDIS_REGISTER_NONE);
+					if (const auto slot = stackAddress(operand)) {
+						if (isMove && i == 0 && operand.size == 64 && operands[1].type == ZYDIS_OPERAND_TYPE_REGISTER) {
+							const auto index = indexOf(operands[1].reg.value);
+							const auto source = index < registers.size() ? registers[index] : Value{};
+							stores.emplace_back(*slot, source.kind == Kind::kGlobal ? static_cast<std::uintptr_t>(source.value) : 0);
+						} else {
+							clobbered.emplace_back(*slot, *slot + (std::max)(operand.size / 8, 1));
+						}
+					}
+				} else if (operand.type == ZYDIS_OPERAND_TYPE_REGISTER) {
+					const auto index = indexOf(operand.reg.value);
+					if (index != rsp) {
+						if (index < registers.size()) {
+							registers[index] = {};
+						}
+						continue;
+					}
+					auto& stack = registers[rsp];
+					const bool adjusts = (instruction.mnemonic == ZYDIS_MNEMONIC_SUB || instruction.mnemonic == ZYDIS_MNEMONIC_ADD) &&
+						i == 0 && instruction.operand_count_visible == 2 && operands[1].type == ZYDIS_OPERAND_TYPE_IMMEDIATE;
+					if (instruction.mnemonic == ZYDIS_MNEMONIC_PUSH) {
+						stack.value -= 8;
+					} else if (instruction.mnemonic == ZYDIS_MNEMONIC_POP) {
+						stack.value += 8;
+					} else if (adjusts) {
+						const auto amount = operands[1].imm.value.s;
+						stack.value += instruction.mnemonic == ZYDIS_MNEMONIC_SUB ? -amount : amount;
+					} else if (!isCall && instruction.mnemonic != ZYDIS_MNEMONIC_RET && (!tracked || tracked->kind != Kind::kStack)) {
+						return 0;
+					}
+				}
+			}
+			if (tracked) {
+				registers[destination] = *tracked;
+			}
+			if (isCall) {
+				clobbered.emplace_back(registers[rsp].value, registers[rsp].value + 32);
+				for (const auto value : volatiles) {
+					registers[indexOf(value)] = {};
+				}
+			}
+			if (!frame && (isCall || isBranch() || instruction.mnemonic == ZYDIS_MNEMONIC_RET)) {
+				frame = registers;
+				for (const auto value : volatiles) {
+					(*frame)[indexOf(value)] = {};
+				}
+			}
+			restart = instruction.mnemonic == ZYDIS_MNEMONIC_RET || instruction.meta.category == ZYDIS_CATEGORY_UNCOND_BR;
+		}
+		if (expectTest || !match || !IsInGameImage(a_perkField, sizeof(void*))) {
+			return 0;
+		}
+		if (matchSlot != kNoSlot) {
+			if (unboundedStackWrite) {
+				return 0;
+			}
+			for (const auto& [offset, source] : stores) {
+				if (offset > matchSlot - 8 && offset < matchSlot + 8 && (offset != matchSlot || source != a_perkField)) {
+					return 0;
+				}
+			}
+			for (const auto& [first, last] : clobbered) {
+				if (first < matchSlot + 8 && last > matchSlot) {
+					return 0;
+				}
+			}
+		}
+		return match;
+	}
+
+	// Gets the live form field of the native WorkshopLocalLeaderPerk_DO default object.
+	RE::TESForm* const* GetWorkshopPerkField(std::uintptr_t a_field)
+	{
+		// BGSDefaultObject layout read from the 1.11.240 constructor: form +0x20, form type +0x28, name +0x30.
+		constexpr std::uintptr_t formOffset = 0x20;
+		constexpr std::uintptr_t typeOffset = 0x28;
+		constexpr std::uintptr_t nameOffset = 0x30;
+		const auto object = a_field - formOffset;
+		if (a_field < formOffset || !IsInGameImage(object, nameOffset + sizeof(RE::BSFixedString))) {
+			return nullptr;
+		}
+		const auto* defaultObject = reinterpret_cast<const RE::TESForm*>(object);
+		if (defaultObject->GetFormType() != RE::FormType::kDefaultObject ||
+			*reinterpret_cast<const std::uint8_t*>(object + typeOffset) != static_cast<std::uint8_t>(RE::FormType::kPerk)) {
+			return nullptr;
+		}
+		const char* name = reinterpret_cast<const RE::BSFixedString*>(object + nameOffset)->c_str();
+		auto* const* field = reinterpret_cast<RE::TESForm* const*>(a_field);
+		if (!name || _stricmp(name, "WorkshopLocalLeaderPerk_DO") != 0 || !*field || !(*field)->As<RE::BGSPerk>()) {
+			return nullptr;
+		}
+		return field;
+	}
+
+	// Routes the native Workshop supply line perk checks through the configured replacement rules.
+	bool InstallWorkshopPerkHook(std::uintptr_t a_buttonEvent)
+	{
+		constexpr std::size_t absoluteJumpSize = 14;
+		if (g_workshopPerkHookInstalled.load(std::memory_order_acquire)) {
+			return true;
+		}
+		const auto fail = [](std::string_view a_reason) {
+			spdlog::warn("Workshop supply line perk check unavailable ({}); replacement inactive", a_reason);
+			return false;
+		};
+		std::array<std::uintptr_t, 2> calls{};
+		std::array<std::array<std::uint8_t, PCF::NativeHooks::kRelativeJumpSize>, 2> originals{};
+		std::size_t attempted = 0;
+		const auto restore = [&]() {
+			bool restored = true;
+			while (attempted != 0) {
+				const auto i = --attempted;
+				try {
+					if (std::memcmp(reinterpret_cast<const void*>(calls[i]), originals[i].data(), originals[i].size()) != 0 &&
+						!PCF::NativeHooks::WriteVerified(calls[i], std::span<const std::uint8_t>{ originals[i] })) {
+						restored = false;
+					}
+				} catch (...) {
+					restored = false;
+				}
+			}
+			if (!restored) {
+				spdlog::error("Workshop perk requirement hook rollback could not be verified");
+			}
+		};
+		try {
+			const auto perkRank = PCF::EngineIDs::ActorGetPerkRank.GetAddress();
+			const auto updateButtons = PCF::EngineIDs::WorkshopMenuUpdateButtonText.GetAddress();
+			if (!perkRank || !updateButtons) {
+				return fail("Address Library ID unavailable");
+			}
+			std::array<std::uintptr_t, 2> fields{};
+			calls = { FindPerkRankCall(a_buttonEvent, perkRank, fields[0]), FindPerkRankCall(updateButtons, perkRank, fields[1]) };
+			if (!calls[0] || !calls[1] || calls[0] == calls[1]) {
+				return fail("native call site not recognized");
+			}
+			const auto* field = fields[0] == fields[1] ? GetWorkshopPerkField(fields[0]) : nullptr;
+			if (!field) {
+				return fail("perk argument is not WorkshopLocalLeaderPerk_DO");
+			}
+			const auto& trampolineSlot = REL::GetTrampoline();
+			if (!*trampolineSlot) {
+				return fail("trampoline unavailable");
+			}
+			auto& trampoline = **trampolineSlot;
+			if (trampoline.IsEmpty()) {
+				constexpr std::size_t size = 64;
+				const auto api = F4SE::GetTrampolineInterface();
+				auto* memory = api->AllocateFromBranchPool(size);
+				if (!memory) {
+					return fail("branch-pool allocation failed");
+				}
+				trampoline.Init(static_cast<std::byte*>(memory), size);
+			}
+			if (trampoline.GetFreeSize() < absoluteJumpSize * calls.size()) {
+				return fail("insufficient trampoline space");
+			}
+			for (std::size_t i = 0; i < calls.size(); ++i) {
+				if (!IsInGameImage(calls[i], originals[i].size()) || PCF::NativeHooks::ReadRelativeCallTarget(calls[i]) != perkRank) {
+					return fail("native call target changed");
+				}
+				std::memcpy(originals[i].data(), reinterpret_cast<const void*>(calls[i]), originals[i].size());
+			}
+			g_workshopPerkRank = reinterpret_cast<PerkRankFunction>(perkRank);
+			g_workshopPerkField = field;
+			const auto replacement = reinterpret_cast<std::uintptr_t>(&WorkshopPerkRankHook);
+			for (std::size_t i = 0; i < calls.size(); ++i) {
+				if (std::memcmp(reinterpret_cast<const void*>(calls[i]), originals[i].data(), originals[i].size()) != 0) {
+					restore();
+					return fail("native call site changed");
+				}
+				// Mark the attempt before WriteCall in case it throws after writing.
+				++attempted;
+				const auto previous = trampoline.WriteCall<5>(calls[i], WorkshopPerkRankHook);
+				if (previous != perkRank || !PCF::NativeHooks::IsRelativeCallTo(calls[i], replacement)) {
+					restore();
+					return fail("call-site write verification failed");
+				}
+			}
+			g_workshopPerkHookInstalled.store(true, std::memory_order_release);
+			return true;
+		} catch (...) {
+			restore();
+			return fail("installation error");
+		}
+	}
+
+	// Installs the hook used to control Workshop artwork.
 	bool InstallWorkshopArtworkHook()
 	{
 		constexpr std::size_t absoluteJumpSize = 14;
@@ -1705,6 +2173,11 @@ namespace PCF::WorkshopMenu
 		g_workshopArtworkInstalled = InstallWorkshopArtworkHook();
 		if (!g_workshopArtworkInstalled) {
 			spdlog::warn("Workshop artwork hook unavailable; retaining Workshop text presentation");
+		}
+		if (!PCF::RuleRegistry::Empty()) {
+			if (InstallWorkshopPerkHook(PCF::NativeHooks::ReadVtableSlot(a_inputVtable, kButtonEventSlot))) {
+				spdlog::info("Workshop supply line perk check active");
+			}
 		}
 		return InstallWorkshopHooks(a_vtable, a_inputVtable);
 	}

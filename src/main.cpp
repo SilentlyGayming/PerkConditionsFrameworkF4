@@ -149,9 +149,6 @@ namespace
 						return;
 					}
 					WriteLogHeader("HOOKS");
-					if (PCF::PerkConditions::PapyrusHookActive()) {
-						spdlog::info("Papyrus Actor.HasPerk hook active");
-					}
 					if (!textHooksInstalled) {
 						spdlog::warn("UI hook system active; MESSAGE body text hook unavailable");
 					} else {
@@ -161,9 +158,6 @@ namespace
 					spdlog::info("Initialization complete");
 				} else if (descriptionHooksActive) {
 					WriteLogHeader("HOOKS");
-					if (PCF::PerkConditions::PapyrusHookActive()) {
-						spdlog::info("Papyrus Actor.HasPerk hook active");
-					}
 					spdlog::info("Description hook system active");
 					WriteLogHeader("RESULT");
 					spdlog::info("Initialization complete");
@@ -221,9 +215,6 @@ namespace
 			PCF::DialogueText::FinishInfoStartup(dialogueResult, infoLogLines, startupInfos);
 
 			WriteLogHeader("HOOKS");
-			if (PCF::PerkConditions::PapyrusHookActive()) {
-				spdlog::info("Papyrus Actor.HasPerk hook active");
-			}
 			if (perkRulesActive && !textHooksInstalled) {
 				spdlog::warn("Condition and UI hook systems active; MESSAGE body text hook unavailable");
 			} else {
@@ -338,10 +329,6 @@ extern "C" __declspec(dllexport) bool F4SE_API F4SEPlugin_Load(const F4SE::LoadI
 		}
 		spdlog::info("{} v{} on Fallout 4 {}", Version::PROJECT, Version::NAME, a_f4se->GetRuntimeVersion().ToString<char>());
 		PCF::DialogueText::InstallEarlyHooks();
-		const auto papyrus = F4SE::GetPapyrusInterface();
-		if (!papyrus->Register(PCF::PerkConditions::RegisterPapyrus)) {
-			spdlog::warn("Papyrus Actor.HasPerk hook unavailable; core PCF systems will continue normally");
-		}
 		const auto messaging = F4SE::GetMessagingInterface();
 		if (!messaging->RegisterListener(OnGameReady, "F4SE")) {
 			spdlog::error("F4SE messaging unavailable");

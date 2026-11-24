@@ -2,7 +2,7 @@ Perk Conditions Framework dependency versions
 
 CommonLibF4 AV
   Repository: https://github.com/LucaDotGit/CommonLibF4.git
-  Git tree: 16b9943e0136bdecad8845b87b2de5ddb7f34f77
+  Commit: 16b9943e0136bdecad8845b87b2de5ddb7f34f77
 
 toml++
   Repository: https://github.com/marzer/tomlplusplus.git
