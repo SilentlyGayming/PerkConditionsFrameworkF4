@@ -308,6 +308,10 @@ namespace
 			result.valueText = fmt::format("Rank {}", result.value);
 			break;
 		case PCF::AlternativeType::kActorValue:
+			result.value = static_cast<double>(a_display.requiredValue);
+			result.strength = a_display.comparison == PCF::ComparisonOp::kLess || a_display.comparison == PCF::ComparisonOp::kLessEqual ? -result.value : result.value;
+			result.valueText = fmt::format("Rank {:g}", a_display.requiredValue);
+			break;
 		case PCF::AlternativeType::kGlobalValue:
 			result.value = static_cast<double>(a_display.requiredValue);
 			result.strength = a_display.comparison == PCF::ComparisonOp::kLess || a_display.comparison == PCF::ComparisonOp::kLessEqual ? -result.value : result.value;

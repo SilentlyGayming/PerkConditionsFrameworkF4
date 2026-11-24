@@ -606,7 +606,7 @@ namespace PCF::CustomConditions
 		// Quest-stage state is implementation/progression logic, not a requirement
 		// the UI should disclose to the player. Keep this centralized so every menu
 		// follows the same invariant.
-		return a_condition.kind == ConditionKind::kFormValue;
+		return a_condition.kind == ConditionKind::kFormValue && a_condition.playerFacing;
 	}
 
 	bool Evaluate(const Condition& a_condition)

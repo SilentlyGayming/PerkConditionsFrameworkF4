@@ -729,6 +729,51 @@ namespace
 		return changed;
 	}
 
+	// Applies final PCF text to one ordinary replacement panel.
+	bool ApplyConfiguredRequirementPanel(Value& a_panel, RE::BGSPerk* a_source)
+	{
+		if (!a_panel.IsAnyObject() || !a_source) {
+			return false;
+		}
+		const auto* presentation = PCF::TextManager::GetConfiguredRequirement(a_source);
+		if (!presentation || !presentation->overrideNativeText) {
+			return false;
+		}
+
+		bool changed = SetBool(a_panel, "visible", true);
+		Value nameField;
+		Value requirementField;
+		Value lock;
+		if (a_panel.GetMember("PerkName_tf", &nameField) && nameField.IsAnyObject()) {
+			changed = SetBool(nameField, "visible", true) || changed;
+			changed = SetPanelName(nameField, presentation->rowLabel) || changed;
+		}
+		if (a_panel.GetMember("Requires_tf", &requirementField) && requirementField.IsAnyObject()) {
+			changed = SetBool(requirementField, "visible", true) || changed;
+			std::string existing;
+			std::string prefix;
+			if (ReadText(requirementField, "text", existing)) {
+				const auto colon = existing.find(':');
+				if (colon != std::string::npos) {
+					prefix = existing.substr(0, colon + 1);
+				}
+			}
+			if (prefix.empty()) {
+				prefix = "Requires:";
+			}
+			std::string text = prefix;
+			if (!text.empty() && text.back() != ' ') {
+				text.push_back(' ');
+			}
+			text.append(presentation->valueText);
+			changed = SetText(requirementField, "text", text) || changed;
+		}
+		if (a_panel.GetMember("PerkLock_mc", &lock) && lock.IsAnyObject()) {
+			changed = SetBool(lock, "visible", !PCF::PerkConditions::PlayerPasses(a_source)) || changed;
+		}
+		return changed;
+	}
+
 	// Applies one player-facing PCF-owned custom requirement after the menu rebuilds its panels.
 	bool ApplyCustomRequirementPanel(Value& a_panel, const PCF::CustomConditions::Condition& a_condition)
 	{
@@ -882,6 +927,49 @@ namespace
 		}
 	}
 
+	// Reasserts ordinary PCF replacement text after native Scaleform formatting.
+	void ReassertSelectedConfiguredRequirementPanels(RE::IMenu* a_menu, std::size_t a_menuIndex)
+	{
+		if (!a_menu || GetSelectedCustomConditionSet(a_menu)) {
+			return;
+		}
+		auto* workbench = RE::DynamicCast<RE::WorkbenchMenuBase*>(a_menu);
+		if (!workbench || !a_menu->menuObj.IsAnyObject()) {
+			return;
+		}
+		Value list;
+		std::uint32_t selected = 0;
+		if (!a_menu->menuObj.GetMember("ModListObject", &list) || !list.IsAnyObject() ||
+			!ReadIndex(list, "selectedIndex", selected) ||
+			static_cast<std::size_t>(selected) >= static_cast<std::size_t>(workbench->modChoiceArray.size())) {
+			return;
+		}
+		const auto& choice = workbench->modChoiceArray[
+			static_cast<decltype(workbench->modChoiceArray.size())>(selected)];
+		const auto& requirements = choice.requiredPerks;
+		const auto count = (std::min)(static_cast<std::size_t>(requirements.size()), kRequirementSlots);
+		for (std::size_t i = 0; i < count; ++i) {
+			const auto& requirement = requirements[static_cast<decltype(requirements.size())>(i)];
+			RE::BGSPerk* source = nullptr;
+			const auto* rule = FindCraftingRule(choice, requirement.first, requirement.second, i, requirements.size(), source);
+			if (!rule || !source) {
+				continue;
+			}
+			if (a_menuIndex == kExamineIndex) {
+				Value panel;
+				if (GetExaminePanel(a_menu, static_cast<std::uint32_t>(i), panel)) {
+					ApplyConfiguredRequirementPanel(panel, source);
+				}
+				continue;
+			}
+			std::array<Value, 2> panels;
+			const auto panelCount = FindPanelsForSlot(a_menu, a_menuIndex, static_cast<std::uint32_t>(i), panels);
+			for (std::size_t panelIndex = 0; panelIndex < panelCount; ++panelIndex) {
+				ApplyConfiguredRequirementPanel(panels[panelIndex], source);
+			}
+		}
+	}
+
 	// Updates requirement rows for a crafting menu.
 	bool UpdateCraftingRows(RE::IMenu* a_menu, ArtworkPlan* a_artworkPlan = nullptr,
 		std::size_t a_artworkMenuIndex = kExamineIndex)
@@ -941,6 +1029,7 @@ namespace
 		// stale text from the previously selected recipe.
 		if (hasSelection) {
 			ReassertSelectedCustomConditionPanels(a_menu, a_artworkMenuIndex);
+			ReassertSelectedConfiguredRequirementPanels(a_menu, a_artworkMenuIndex);
 		}
 		return true;
 	}
@@ -1377,6 +1466,7 @@ namespace
 		}
 		hook.preDisplay(a_menu);
 		ReassertSelectedCustomConditionPanels(a_menu, kCookingIndex);
+		ReassertSelectedConfiguredRequirementPanels(a_menu, kCookingIndex);
 	}
 
 	// Installs and verifies the update hook for a crafting menu.

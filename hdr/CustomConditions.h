@@ -41,6 +41,7 @@ namespace PCF::CustomConditions
 		RE::TESQuest* quest{ nullptr };
 		std::uint16_t questStage{ 0 };
 		bool orWithNext{ false };
+		bool playerFacing{ true };
 		TextManager::RequirementPresentation presentation;
 	};
 

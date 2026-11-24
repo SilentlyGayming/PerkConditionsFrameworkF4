@@ -911,6 +911,7 @@ namespace PCF::RuleRegistry
 
 		const auto resolveCustomCondition = [&](const RawCustomCondition& raw, PCF::CustomConditions::Condition& resolved) {
 			resolved.orWithNext = raw.orWithNext;
+			resolved.playerFacing = raw.playerFacing;
 			if (!std::isfinite(raw.requiredValue) || raw.requiredValue < 0.0F || raw.requiredValue > 65535.0F ||
 				std::trunc(raw.requiredValue) != raw.requiredValue) {
 				if (raw.type != CustomConditionType::kFormValue) {

@@ -360,24 +360,41 @@ namespace
 					// and means this row is combined with the following row using native CTDA OR semantics.
 					const bool typedQuest = fields.size() >= 3 &&
 						(ToUpper(fields[2]) == "QUESTSTAGE" || ToUpper(fields[2]) == "QUESTSTAGEDONE");
-					const auto readJoin = [&](std::size_t a_index) {
-						if (fields.size() <= a_index) {
-							return true;
-						}
-						if (ToUpper(fields[a_index]) != "OR") {
-							result.issues.push_back({ line, "Invalid [Conditions] join; expected OR" });
+					const auto readModifiers = [&](std::size_t a_index) {
+						bool sawOR = false;
+						bool sawHide = false;
+						for (std::size_t i = a_index; i < fields.size(); ++i) {
+							const auto modifier = ToUpper(fields[i]);
+							if (modifier == "OR") {
+								if (sawOR) {
+									result.issues.push_back({ line, "Duplicate [Conditions] OR modifier" });
+									return false;
+								}
+								sawOR = true;
+								rule.orWithNext = true;
+								continue;
+							}
+							if (modifier == "HIDE") {
+								if (sawHide) {
+									result.issues.push_back({ line, "Duplicate [Conditions] HIDE modifier" });
+									return false;
+								}
+								sawHide = true;
+								rule.playerFacing = false;
+								continue;
+							}
+							result.issues.push_back({ line, "Invalid [Conditions] modifier; expected OR or HIDE" });
 							return false;
 						}
-						rule.orWithNext = true;
 						return true;
 					};
 
-					if (!typedQuest && (fields.size() == 6 || fields.size() == 7)) {
+					if (!typedQuest && fields.size() >= 6 && fields.size() <= 8) {
 						rule.type = PCF::CustomConditionType::kFormValue;
 						if (std::any_of(fields.begin(), fields.begin() + 4, [](std::string_view a_field) { return a_field.empty(); }) ||
-							!ReadComparison(fields[4], rule.comparison) || !ReadCheckValue(fields[5], rule.requiredValue) || !readJoin(6)) {
+							!ReadComparison(fields[4], rule.comparison) || !ReadCheckValue(fields[5], rule.requiredValue) || !readModifiers(6)) {
 							result.issues.push_back({ line,
-								"Expected targetPlugin|targetFormID|valuePlugin|valueFormID|comparison|requiredValue[|OR]" });
+								"Expected targetPlugin|targetFormID|valuePlugin|valueFormID|comparison|requiredValue[|OR][|HIDE]" });
 							continue;
 						}
 						rule.targetPlugin = fields[0];
@@ -388,13 +405,13 @@ namespace
 						continue;
 					}
 
-					if (typedQuest && (fields.size() == 7 || fields.size() == 8)) {
+					if (typedQuest && fields.size() >= 7 && fields.size() <= 9) {
 						const auto kind = ToUpper(fields[2]);
 						rule.type = kind == "QUESTSTAGE" ? PCF::CustomConditionType::kQuestStage : PCF::CustomConditionType::kQuestStageDone;
 						if (fields[0].empty() || fields[1].empty() || fields[3].empty() || fields[4].empty() ||
-							!ReadComparison(fields[5], rule.comparison) || !ReadCheckValue(fields[6], rule.requiredValue) || !readJoin(7)) {
+							!ReadComparison(fields[5], rule.comparison) || !ReadCheckValue(fields[6], rule.requiredValue) || !readModifiers(7)) {
 							result.issues.push_back({ line,
-								"Expected targetPlugin|targetFormID|QuestStage/QuestStageDone|questPlugin|questFormID|comparison|stage[|OR]" });
+								"Expected targetPlugin|targetFormID|QuestStage/QuestStageDone|questPlugin|questFormID|comparison|stage[|OR][|HIDE]" });
 							continue;
 						}
 						if (rule.type == PCF::CustomConditionType::kQuestStageDone && rule.comparison != PCF::ComparisonOp::kEqual) {
@@ -410,7 +427,7 @@ namespace
 					}
 
 					result.issues.push_back({ line,
-						"Expected a 6-field form-value or 7-field typed quest condition, optionally followed by |OR" });
+						"Expected a 6-field form-value or 7-field typed quest condition, optionally followed by |OR and/or |HIDE" });
 					continue;
 				}
 
